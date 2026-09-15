@@ -286,3 +286,65 @@ function normalizeAisTimestamp(value) {
     ? new Date().toISOString()
     : date.toISOString();
 }
+
+/**
+ * Serializes the live vessel cache into a plain JSON-friendly snapshot for
+ * disk persistence. Deliberately excludes the per-MMSI track ring buffers
+ * (`_aisStreamTracks`) — those are "recent path" breadcrumbs for trail
+ * rendering, not the accumulated history feature, and they repopulate
+ * naturally within minutes of the feed reconnecting.
+ *
+ * @returns {{vessels: Array<[string, object]>, static: Array<[string, object]>}}
+ */
+export function exportAisStreamState() {
+  return {
+    vessels: [..._aisStreamVessels.entries()],
+    static: [..._aisStreamStatic.entries()],
+  };
+}
+
+/**
+ * Restores a snapshot produced by exportAisStreamState(), meant to be called
+ * once at server startup before the live feed reconnects. Malformed entries
+ * are skipped rather than throwing, since a corrupt or hand-edited save file
+ * must never block startup. Runs the same staleness/cap pruning as live
+ * ingestion, so a save file older than AISSTREAM_STALE_MS restores nothing.
+ *
+ * @param {unknown} state
+ * @returns {number} Count of vessel rows actually restored.
+ */
+export function importAisStreamState(state) {
+  if (!state || typeof state !== 'object') return 0;
+
+  if (Array.isArray(state.static)) {
+    for (const entry of state.static) {
+      const mmsi = entry?.[0];
+      const data = entry?.[1];
+      if (typeof mmsi === 'string' && data && typeof data === 'object') {
+        _aisStreamStatic.set(mmsi, data);
+      }
+    }
+  }
+
+  let restored = 0;
+  if (Array.isArray(state.vessels)) {
+    for (const entry of state.vessels) {
+      const mmsi = entry?.[0];
+      const row = entry?.[1];
+      if (
+        typeof mmsi === 'string' &&
+        row &&
+        typeof row === 'object' &&
+        Number.isFinite(row.lat) &&
+        Number.isFinite(row.lon) &&
+        Number.isFinite(row._updatedAt)
+      ) {
+        _aisStreamVessels.set(mmsi, row);
+        restored += 1;
+      }
+    }
+  }
+
+  pruneAisStreamCache();
+  return restored;
+}
