@@ -11,6 +11,10 @@ import {
   aisStreamRows,
   newestAisPositionAt,
 } from './ais-store.js';
+import {
+  loadAisStreamStateFromDisk,
+  startAisPersistence,
+} from './ais-persist.js';
 // ---------------------------------------------------------------------------
 // AISStream live vessel cache state
 // ---------------------------------------------------------------------------
@@ -61,6 +65,10 @@ let _aisStreamTickTimer = null;
 let _aisNeedsRearm = false;
 /** @type {Function|null|undefined} `ws` constructor; null = unavailable, undefined = not yet probed. */
 let _aisWebSocketImpl;
+/** Guards the disk-load + save-timer startup so a Vite in-process reload
+ * (which re-runs configureServer without a fresh process) never re-imports
+ * a stale disk snapshot on top of already-live in-memory vessel data. */
+let _aisPersistenceStarted = false;
 
 /**
  * Vite plugin: AISStream live vessel cache.
@@ -156,6 +164,7 @@ export function aisLiveProxy() {
     name: 'ais-live-proxy',
     configureServer(server) {
       install(server.middlewares);
+      ensureAisPersistence();
       startAisStreamWatchdogTick();
       // Vite restarts the server in-process on a config change while this
       // module's state survives; without teardown each reload stacks another
@@ -164,6 +173,7 @@ export function aisLiveProxy() {
     },
     configurePreviewServer(server) {
       install(server.middlewares);
+      ensureAisPersistence();
       startAisStreamWatchdogTick();
       server.httpServer?.on('close', disposeAisStream);
     },
@@ -323,6 +333,18 @@ function aisStreamStatusSnapshot() {
     watchdog: 'armed',
     staleAfterMs: AISSTREAM_SILENCE_REPORT_MS,
   };
+}
+
+/**
+ * Loads any saved vessel history off the persistent disk and starts the
+ * periodic save timer, once per process. Runs before the watchdog tick so a
+ * restored vessel is already in the cache the moment the feed reconnects.
+ */
+function ensureAisPersistence() {
+  if (_aisPersistenceStarted) return;
+  _aisPersistenceStarted = true;
+  loadAisStreamStateFromDisk();
+  startAisPersistence();
 }
 
 /**
