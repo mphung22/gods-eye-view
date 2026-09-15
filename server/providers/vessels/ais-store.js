@@ -1,6 +1,6 @@
 import { isRecognizedAisEnvelope } from '../../../src/data/aisStreamAdapter.js';
 export const AISSTREAM_CACHE_MAX = 50000;
-export const AISSTREAM_STALE_MS = 30 * 60 * 1000;
+export const AISSTREAM_STALE_MS = 24 * 60 * 60 * 1000;
 // Per-MMSI recent-path ring buffers (PRD WS-F F3). Float32 lat/lon (~1m
 // precision, fine for 25m thinning) + Uint32 epoch seconds ≈ 12B/sample;
 // 64 samples × 50k MMSIs worst case ≈ 38MB. Tracks exist only while the dev
