@@ -13,6 +13,7 @@ import { defaultSourceRoot } from './common/source-root.js';
 import { radioBrowserProxy } from './radio.js';
 import { gbfsProxy } from './gbfs.js';
 import { adsbLolProxy } from './aircraft/adsb-lol.js';
+import { gpsInterferenceProxy } from './gps.js';
 import { aisLiveProxy } from './vessels/ais-live.js';
 import { trackBackfillProxies } from './aircraft/tracks.js';
 import { openAiRealtimeProxy } from './openai.js';
@@ -37,6 +38,7 @@ function localProviderPlugins() {
     radioBrowserProxy(),
     gbfsProxy(),
     adsbLolProxy(),
+    gpsInterferenceProxy(),
     aisLiveProxy(),
     trackBackfillProxies(),
     openAiRealtimeProxy(),
@@ -63,6 +65,7 @@ export { googlePlacesContextProxy } from './places.js';
 export { googleServerApiKey } from './places.js';
 export { keylessGooglePlacesResponse } from './places.js';
 export { adsbLolFallbackAnchor } from './aircraft/opensky.js';
+export { gpsInterferenceProxy } from './gps.js';
 export { readResponseTextCapped } from './common/http.js';
 export { readResponseJsonCapped } from './common/http.js';
 export { coalesceProxyRequest } from './common/http.js';
