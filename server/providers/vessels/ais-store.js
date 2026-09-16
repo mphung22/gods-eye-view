@@ -1,4 +1,9 @@
 import { isRecognizedAisEnvelope } from '../../../src/data/aisStreamAdapter.js';
+import {
+  evaluateAisGap,
+  recordAisFeedActivity,
+  recordAisGap,
+} from './ais-gaps.js';
 export const AISSTREAM_CACHE_MAX = 50000;
 export const AISSTREAM_STALE_MS = 24 * 60 * 60 * 1000;
 // Per-MMSI recent-path ring buffers (PRD WS-F F3). Float32 lat/lon (~1m
@@ -34,6 +39,11 @@ export function ingestAisStreamEnvelope(envelope) {
   // only an MMSI is not proof the feed works.
   if (!isRecognizedAisEnvelope(envelope)) return false;
 
+  // Every recognised envelope is evidence the feed is delivering, whether or
+  // not it carries a position. Gap detection needs that record to tell a
+  // vessel's silence apart from our own outage.
+  recordAisFeedActivity();
+
   const messageType = envelope?.MessageType;
   const message = envelope?.Message?.[messageType] || {};
   const metadata = envelope?.MetaData || envelope?.Metadata || {};
@@ -64,7 +74,8 @@ export function ingestAisStreamEnvelope(envelope) {
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return true;
 
   const staticData = _aisStreamStatic.get(mmsi) || {};
-  _aisStreamVessels.set(mmsi, {
+  const previous = _aisStreamVessels.get(mmsi);
+  const row = {
     lat,
     lon,
     name: vesselNameFromAis(metadata, message, staticData) || `MMSI ${mmsi}`,
@@ -82,7 +93,14 @@ export function ingestAisStreamEnvelope(envelope) {
     // trail spacing and dead reckoning depend on true fix epochs.
     last_position_epoch: aisEpochSeconds(metadata.time_utc ?? metadata.TimeUtc),
     _updatedAt: Date.now(),
-  });
+  };
+
+  // Evaluate against the row this one replaces, before it is overwritten.
+  // A qualifying silence is recorded once, when the vessel comes back.
+  const gap = evaluateAisGap(previous, row);
+  if (gap) recordAisGap(gap);
+
+  _aisStreamVessels.set(mmsi, row);
 
   appendAisTrackSample(
     mmsi,

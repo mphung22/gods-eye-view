@@ -35,6 +35,35 @@ persistence was added across three files:
   `_aisPersistenceStarted` flag so a Vite dev-server reload never double-starts
   the timers or re-imports stale disk state.
 
+## AIS gap / dark-vessel detection (added September 2026)
+
+`server/providers/vessels/ais-gaps.js` records the silences: when a vessel stops
+broadcasting and later comes back, the gap is stored with both endpoints, the
+distance covered while dark, and the speed that implies. Exposed at
+`GET /api/ais-live/gaps` — `?region=hormuz` for the Strait of Hormuz and its
+approaches, plus `hours`, `minSec` and `limit`.
+
+Two clocks are used and they are NOT interchangeable:
+
+- **AIS report epochs** (`last_position_epoch`) measure the silence as the
+  vessel reported it, so the duration is a property of the vessel rather than of
+  our polling or restart schedule.
+- **Wall-clock ingest activity** proves the feed was delivering across that
+  window. Without it, every restart would republish the whole restored cache as
+  "dark vessels", since each restored row's next fix is hours newer than the one
+  persisted before the restart. A silence we could not have observed is not
+  reported at all.
+
+Feed liveness is a 6KB ring of per-minute ingest marks (25h). It is deliberately
+NOT persisted: it describes this process's uptime, and restoring it would let a
+restart vouch for a window when nothing was running. Gap events themselves ARE
+persisted, alongside the vessel rows in the same `/var/data` snapshot under a
+`gaps` key; snapshots written before this feature simply restore zero.
+
+Memory: capped at 2,000 events, pruned to the same 24h window as the vessel
+cache — roughly 500KB worst case, which is immaterial against the limit below.
+Tuning: `AIS_GAP_MIN_SEC` (default 3600).
+
 ## Known issue: memory-limit restarts
 
 `AISSTREAM_STALE_MS` was earlier extended from 30 minutes to 24 hours (keeps

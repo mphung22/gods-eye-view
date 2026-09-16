@@ -553,5 +553,7 @@
   "src/app/data.js",
   "src/app/tools.js",
   "src/app/startupChrome.js",
-  "src/app/errors.js"
+  "src/app/errors.js",
+  "server/providers/vessels/ais-gaps.js",
+  "src/tooling/aisGaps.test.mjs"
 ]

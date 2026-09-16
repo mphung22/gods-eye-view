@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { exportAisStreamState, importAisStreamState } from './ais-store.js';
+import { exportAisGapState, importAisGapState } from './ais-gaps.js';
 
 // Render's persistent disk (mounted at this path in production) is what lets
 // accumulated vessel history survive a restart/redeploy instead of resetting
@@ -40,10 +41,16 @@ export function loadAisStreamStateFromDisk() {
     const raw = readFileSync(path, 'utf8');
     const state = JSON.parse(raw);
     const restored = importAisStreamState(state);
+    // Snapshots written before gap detection existed simply carry no `gaps`
+    // key, and restore zero — the reader must stay backward compatible.
+    const gaps = importAisGapState(state);
     if (restored > 0) {
       console.log(
         `[AIS Persistence] Restored ${restored} vessel(s) from ${path}`,
       );
+    }
+    if (gaps > 0) {
+      console.log(`[AIS Persistence] Restored ${gaps} AIS gap event(s)`);
     }
   } catch (error) {
     console.warn(
@@ -62,7 +69,7 @@ function saveAisStreamStateToDisk() {
   const path = persistPath();
   try {
     mkdirSync(dirname(path), { recursive: true });
-    const state = exportAisStreamState();
+    const state = { ...exportAisStreamState(), ...exportAisGapState() };
     const tmpPath = `${path}.tmp`;
     writeFileSync(tmpPath, JSON.stringify(state));
     renameSync(tmpPath, path);

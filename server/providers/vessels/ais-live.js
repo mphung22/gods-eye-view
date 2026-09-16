@@ -15,6 +15,12 @@ import {
   loadAisStreamStateFromDisk,
   startAisPersistence,
 } from './ais-persist.js';
+import {
+  AIS_GAP_REGIONS,
+  aisGapCount,
+  gapMinSeconds,
+  listAisGaps,
+} from './ais-gaps.js';
 // ---------------------------------------------------------------------------
 // AISStream live vessel cache state
 // ---------------------------------------------------------------------------
@@ -110,6 +116,62 @@ export function aisLiveProxy() {
               samples: readAisTrack(mmsi),
               source: 'AISStream (accumulated since server start)',
               retainedSec: Math.floor(AISSTREAM_STALE_MS / 1000),
+            }),
+          );
+          return;
+        }
+
+        // Gaps sub-route, same prefix-match reasoning as /track above.
+        if (
+          incoming.pathname === '/gaps' ||
+          incoming.pathname.startsWith('/gaps/')
+        ) {
+          const region = String(
+            incoming.searchParams.get('region') || '',
+          ).trim();
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          if (region && !Object.hasOwn(AIS_GAP_REGIONS, region)) {
+            res.statusCode = 400;
+            res.end(
+              JSON.stringify({
+                error: `unknown region; known regions: ${Object.keys(AIS_GAP_REGIONS).join(', ')}`,
+                gaps: [],
+              }),
+            );
+            return;
+          }
+
+          const windowHours = clampInt(
+            incoming.searchParams.get('hours'),
+            1,
+            24,
+            24,
+          );
+          const gaps = listAisGaps({
+            region: region || undefined,
+            sinceSec: Math.floor(Date.now() / 1000) - windowHours * 3600,
+            minDurationSec: clampInt(
+              incoming.searchParams.get('minSec'),
+              60,
+              86400,
+              gapMinSeconds(),
+            ),
+            limit: clampInt(incoming.searchParams.get('limit'), 1, 1000, 200),
+          });
+
+          res.statusCode = 200;
+          res.end(
+            JSON.stringify({
+              gaps,
+              region: region ? AIS_GAP_REGIONS[region] : null,
+              windowHours,
+              // Detection only sees silences that BEGAN while this process was
+              // running and delivering. A caller comparing counts across a
+              // restart needs to know the observation window, not just the rows.
+              retainedTotal: aisGapCount(),
+              minGapSec: gapMinSeconds(),
+              source: 'AISStream (gap analysis)',
             }),
           );
           return;
