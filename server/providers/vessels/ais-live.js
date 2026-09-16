@@ -6,6 +6,7 @@ import { clampInt } from '../common/query.js';
 import {
   AISSTREAM_CACHE_MAX,
   AISSTREAM_STALE_MS,
+  aisRegionHealth,
   ingestAisStreamEnvelope,
   readAisTrack,
   aisStreamRows,
@@ -199,6 +200,51 @@ export function aisLiveProxy() {
               retainedInMemory: crossingCount(),
               note: 'draught, length and type are self-reported; sizeClass and laden are estimates',
               source: 'AISStream (gate crossings)',
+            }),
+          );
+          return;
+        }
+
+        // One call that answers "is the feed delivering, and which oceans".
+        // Exists because the alternative was flying a 3D globe to three
+        // coordinates and squinting for markers — which cannot distinguish a
+        // region restored from disk from one that is actually receiving.
+        if (
+          incoming.pathname === '/diagnostics' ||
+          incoming.pathname.startsWith('/diagnostics/')
+        ) {
+          const feed = aisStreamStatusSnapshot();
+          const regions = aisRegionHealth();
+          const live = regions.filter((r) => r.freshVessels > 0);
+
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(
+            JSON.stringify({
+              // A one-line answer first, so the reading does not depend on
+              // interpreting the numbers underneath it correctly.
+              verdict: !process.env.AISSTREAM_API_KEY
+                ? 'NO KEY — AISSTREAM_API_KEY is not set'
+                : feed.status !== 'live'
+                  ? `FEED ${String(feed.status).toUpperCase()} — ${feed.error || 'not delivering'}`
+                  : live.length === 0
+                    ? 'FEED LIVE but no fresh vessels in any chokepoint region'
+                    : `FEED LIVE — receiving from: ${live.map((r) => r.id).join(', ')}`,
+              feed: {
+                status: feed.status,
+                error: feed.error,
+                lastMessageAt: feed.lastMessageAt,
+                silentForMs: feed.silentForMs,
+                reconnectAttempt: feed.reconnectAttempt,
+              },
+              // freshVessels is the one that matters. cachedVessels counts
+              // rows restored from disk, which look identical on a map to a
+              // region that is actually live.
+              regions,
+              freshWindowMin: 15,
+              cacheSize: aisStreamRows(AISSTREAM_CACHE_MAX).length,
+              source: 'AISStream (reception diagnostics)',
             }),
           );
           return;

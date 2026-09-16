@@ -496,3 +496,41 @@ export function importAisStreamState(state) {
   pruneAisStreamCache();
   return restored;
 }
+
+/**
+ * Per-region reception health, for answering "is the feed actually delivering
+ * this ocean" without looking at a map.
+ *
+ * The distinction that matters is FRESH versus CACHED. After a restart the
+ * cache is repopulated from disk, so a region can hold thousands of vessels
+ * while receiving nothing at all — which looks identical on a globe to a
+ * healthy region. Only the fresh count says the feed is alive there.
+ *
+ * @param {number} [freshMs] Age below which a fix counts as live.
+ * @param {number} [nowMs] Wall-clock milliseconds.
+ * @returns {object[]} One row per chokepoint region.
+ */
+export function aisRegionHealth(freshMs = 15 * 60 * 1000, nowMs = Date.now()) {
+  const rows = Object.values(CHOKEPOINTS).map((chokepoint) => ({
+    id: chokepoint.id,
+    name: chokepoint.name,
+    cachedVessels: 0,
+    freshVessels: 0,
+    newestFixAgeSec: null,
+  }));
+  const byId = new Map(rows.map((row) => [row.id, row]));
+
+  for (const vessel of _aisStreamVessels.values()) {
+    for (const chokepoint of Object.values(CHOKEPOINTS)) {
+      if (!insideBox(vessel.lat, vessel.lon, chokepoint.region)) continue;
+      const row = byId.get(chokepoint.id);
+      row.cachedVessels += 1;
+      const ageSec = Math.round((nowMs - vessel._updatedAt) / 1000);
+      if (nowMs - vessel._updatedAt <= freshMs) row.freshVessels += 1;
+      if (row.newestFixAgeSec === null || ageSec < row.newestFixAgeSec) {
+        row.newestFixAgeSec = ageSec;
+      }
+    }
+  }
+  return rows;
+}
