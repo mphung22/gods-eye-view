@@ -26,6 +26,14 @@ databases:
     # hundred rows a day needs.
     plan: basic-256mb
     postgresMajorVersion: "16"
+    # Empty means INTERNAL ONLY: reachable by the collector, not from the
+    # internet. Deliberate — an open Postgres is a bad default even behind a
+    # strong password.
+    #
+    # Phase 2 analysis will need to query this from a laptop. When it does,
+    # add your own IP in the dashboard (Database -> Access Control) rather
+    # than opening it to 0.0.0.0/0 here.
+    ipAllowList: []
 
 services:
   - type: web
