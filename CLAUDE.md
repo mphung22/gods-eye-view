@@ -59,3 +59,10 @@ on a restart. Revisit if these restarts start happening often:
   owner (mphung22) rather than via `git push` with an embedded token. A local
   clone + normal `git push` works fine if you have your own GitHub auth set up.
 
+## Background reading
+
+- `docs/VIDEO-NOTES.md` — notes on the upstream God's Eye View video series:
+  chapter maps, the data layers behind each build, and what the dark-vessel
+  detection episode implies for the AIS persistence work above. Read it before
+  proposing new analysis layers; it covers ground the upstream README does not.
+
