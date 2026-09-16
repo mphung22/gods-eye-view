@@ -8,24 +8,42 @@ import {
 import { dirname } from 'node:path';
 import { exportAisStreamState, importAisStreamState } from './ais-store.js';
 import { exportAisGapState, importAisGapState } from './ais-gaps.js';
+import {
+  exportTimeseriesState,
+  importTimeseriesState,
+} from './ais-timeseries.js';
 
 // Render's persistent disk (mounted at this path in production) is what lets
 // accumulated vessel history survive a restart/redeploy instead of resetting
 // to empty every time — see AIS_PERSIST_PATH to point elsewhere (e.g. local
 // dev, or a differently-mounted disk).
 const DEFAULT_PERSIST_PATH = '/var/data/ais-vessels.json';
+// The hourly counters live in their OWN file, deliberately. The vessel
+// snapshot is a 24h cache that prunes itself; this one is a years-long record
+// that can never be rebuilt. Sharing a file would eventually mean one
+// retention rule quietly deleting the other's data.
+const DEFAULT_TIMESERIES_PATH = '/var/data/hormuz-timeseries.json';
 const SAVE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 /** @type {number|null} */
 let _saveTimer = null;
 /** @type {string|null} */
 let _persistPath = null;
+/** @type {string|null} */
+let _timeseriesPath = null;
 let _shutdownHooksArmed = false;
 
 function persistPath() {
   if (_persistPath) return _persistPath;
   _persistPath = process.env.AIS_PERSIST_PATH || DEFAULT_PERSIST_PATH;
   return _persistPath;
+}
+
+function timeseriesPath() {
+  if (_timeseriesPath) return _timeseriesPath;
+  _timeseriesPath =
+    process.env.AIS_TIMESERIES_PATH || DEFAULT_TIMESERIES_PATH;
+  return _timeseriesPath;
 }
 
 /**
@@ -58,6 +76,27 @@ export function loadAisStreamStateFromDisk() {
       error?.message || error,
     );
   }
+
+  // Loaded separately so a corrupt vessel snapshot cannot take the
+  // unrebuildable hourly record down with it.
+  const tsPath = timeseriesPath();
+  try {
+    if (existsSync(tsPath)) {
+      const hours = importTimeseriesState(
+        JSON.parse(readFileSync(tsPath, 'utf8')),
+      );
+      if (hours > 0) {
+        console.log(
+          `[AIS Persistence] Restored ${hours} hour(s) of Hormuz counters`,
+        );
+      }
+    }
+  } catch (error) {
+    console.warn(
+      '[AIS Persistence] Could not load Hormuz time series:',
+      error?.message || error,
+    );
+  }
 }
 
 /**
@@ -76,6 +115,19 @@ function saveAisStreamStateToDisk() {
   } catch (error) {
     console.warn(
       '[AIS Persistence] Could not save state:',
+      error?.message || error,
+    );
+  }
+
+  const tsPath = timeseriesPath();
+  try {
+    mkdirSync(dirname(tsPath), { recursive: true });
+    const tmpPath = `${tsPath}.tmp`;
+    writeFileSync(tmpPath, JSON.stringify(exportTimeseriesState()));
+    renameSync(tmpPath, tsPath);
+  } catch (error) {
+    console.warn(
+      '[AIS Persistence] Could not save Hormuz time series:',
       error?.message || error,
     );
   }

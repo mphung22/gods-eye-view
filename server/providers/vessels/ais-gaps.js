@@ -28,6 +28,30 @@
 /** Silence, in AIS report time, before a vessel is considered to have gone dark. */
 export const AIS_GAP_MIN_SEC = 3600;
 /**
+ * Straight-line speed above which a gap cannot describe a real voyage.
+ *
+ * The straight line between two fixes is the SHORTEST path the vessel could
+ * have taken, so the implied speed is a LOWER bound on how fast it actually
+ * moved. That asymmetry is what makes this test strong: exceeding the bound is
+ * positive evidence that at least one endpoint is fabricated, not merely that
+ * the vessel was quick. A laden VLCC runs 12-16 kts and the fastest commercial
+ * traffic is in the mid-20s, so 30 leaves real headroom above every legitimate
+ * hull before anything is called a spoof.
+ *
+ * Note the other reading of the same evidence: two vessels transmitting the
+ * same MMSI produce identical arithmetic. Both are identity falsification, and
+ * neither is a dark transit, which is why one classification covers them.
+ */
+export const AIS_MAX_PLAUSIBLE_KTS = 30;
+
+/** How a recorded gap is classified. */
+export const AIS_GAP_CLASSES = Object.freeze({
+  /** A plausible silence: the vessel could physically have made the trip. */
+  dark: 'dark',
+  /** Physically impossible: a fabricated position, jamming artefact or shared MMSI. */
+  spoofed: 'spoofed',
+});
+/**
  * Share of the wall-clock window that must show feed activity before a silence
  * is attributed to the vessel. Below this it is our outage, not their silence.
  */
@@ -178,6 +202,8 @@ export function evaluateAisGap(previous, next, options = {}) {
 
   const distanceKm = haversineKm(startLat, startLon, endLat, endLon);
   const hours = durationSec / 3600;
+  const impliedSpeedKts =
+    hours > 0 ? Number((distanceKm / 1.852 / hours).toFixed(2)) : 0;
 
   return {
     mmsi: String(previous.mmsi ?? next.mmsi ?? ''),
@@ -194,8 +220,14 @@ export function evaluateAisGap(previous, next, options = {}) {
     // Nautical miles per hour over the straight line between the two fixes.
     // A vessel that reappears implausibly far away spent the silence moving;
     // one that reappears where it vanished was loitering or at anchor.
-    impliedSpeedKts:
-      hours > 0 ? Number((distanceKm / 1.852 / hours).toFixed(2)) : 0,
+    impliedSpeedKts,
+    // Separating these matters for reading the data: dark transits count
+    // vessels choosing not to be seen, spoofs count the electronic warfare
+    // around them. Summing the two would measure neither.
+    classification:
+      impliedSpeedKts > AIS_MAX_PLAUSIBLE_KTS
+        ? AIS_GAP_CLASSES.spoofed
+        : AIS_GAP_CLASSES.dark,
     feedCoverage: Number(coverage.ratio.toFixed(3)),
   };
 }
@@ -249,10 +281,12 @@ export function gapTouchesBox(event, box) {
  * @param {number} [query.sinceSec] Only gaps that ended at or after this epoch.
  * @param {number} [query.minDurationSec] Only gaps at least this long.
  * @param {number} [query.limit] Maximum rows returned.
+ * @param {string} [query.classification] `dark` or `spoofed`.
  * @returns {object[]} Matching events, newest first.
  */
 export function listAisGaps(query = {}) {
-  const { region, bbox, sinceSec, minDurationSec, limit } = query;
+  const { region, bbox, sinceSec, minDurationSec, limit, classification } =
+    query;
   const box = bbox || (region ? AIS_GAP_REGIONS[region] : null);
 
   let rows = _gapEvents;
@@ -263,6 +297,9 @@ export function listAisGaps(query = {}) {
   if (Number.isFinite(minDurationSec)) {
     rows = rows.filter((event) => event.durationSec >= minDurationSec);
   }
+  if (classification) {
+    rows = rows.filter((event) => event.classification === classification);
+  }
 
   rows = [...rows].sort((a, b) => b.endEpochSec - a.endEpochSec);
   return Number.isFinite(limit) && limit > 0 ? rows.slice(0, limit) : rows;
@@ -271,6 +308,22 @@ export function listAisGaps(query = {}) {
 /** @returns {number} Count of retained gap events. */
 export function aisGapCount() {
   return _gapEvents.length;
+}
+
+/**
+ * Retained events split by classification.
+ * @param {object} [query] Same filters as {@link listAisGaps}.
+ * @returns {{dark:number, spoofed:number, total:number}} Counts.
+ */
+export function aisGapCounts(query = {}) {
+  const rows = listAisGaps({ ...query, classification: undefined });
+  let dark = 0;
+  let spoofed = 0;
+  for (const event of rows) {
+    if (event.classification === AIS_GAP_CLASSES.spoofed) spoofed += 1;
+    else dark += 1;
+  }
+  return { dark, spoofed, total: rows.length };
 }
 
 /**
@@ -317,7 +370,16 @@ export function importAisGapState(state, nowMs = Date.now()) {
       Number.isFinite(event.endLon) &&
       event.endEpochSec >= cutoff,
   );
-  _gapEvents = restored.slice(-AIS_GAP_MAX_EVENTS);
+  // Events persisted before classification existed carry none. Deriving it on
+  // read keeps one rule in one place, so a threshold change reclassifies the
+  // whole history instead of leaving two eras that disagree.
+  _gapEvents = restored.slice(-AIS_GAP_MAX_EVENTS).map((event) => ({
+    ...event,
+    classification:
+      Number(event.impliedSpeedKts) > AIS_MAX_PLAUSIBLE_KTS
+        ? AIS_GAP_CLASSES.spoofed
+        : AIS_GAP_CLASSES.dark,
+  }));
   return _gapEvents.length;
 }
 

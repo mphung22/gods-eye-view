@@ -4,6 +4,13 @@ import {
   recordAisFeedActivity,
   recordAisGap,
 } from './ais-gaps.js';
+import {
+  gateCrossing,
+  isQueued,
+  recordGapForHour,
+  recordQueueDepth,
+  recordTransit,
+} from './ais-timeseries.js';
 export const AISSTREAM_CACHE_MAX = 50000;
 export const AISSTREAM_STALE_MS = 24 * 60 * 60 * 1000;
 // Per-MMSI recent-path ring buffers (PRD WS-F F3). Float32 lat/lon (~1m
@@ -98,9 +105,18 @@ export function ingestAisStreamEnvelope(envelope) {
   // Evaluate against the row this one replaces, before it is overwritten.
   // A qualifying silence is recorded once, when the vessel comes back.
   const gap = evaluateAisGap(previous, row);
-  if (gap) recordAisGap(gap);
+  if (gap) {
+    recordAisGap(gap);
+    recordGapForHour(gap.classification);
+  }
+
+  // A transit is counted where it happens, between two consecutive fixes. The
+  // same pair of rows answers both questions, so neither needs its own sweep.
+  const crossing = gateCrossing(previous, row);
+  if (crossing) recordTransit(crossing);
 
   _aisStreamVessels.set(mmsi, row);
+  sampleQueueDepthHourly();
 
   appendAisTrackSample(
     mmsi,
@@ -244,6 +260,30 @@ export function aisStreamRows(maxRows) {
   }
   rows.sort((a, b) => b._updatedAt - a._updatedAt);
   return rows.slice(0, maxRows).map(({ _updatedAt, ...row }) => row);
+}
+
+/** Epoch hour whose queue depth has already been sampled. */
+let _queueSampledHour = -1;
+
+/**
+ * Sweep the cache for waiting vessels, at most once an hour.
+ *
+ * This runs from the ingest path, which is hot, so the hour check guards an
+ * O(cache) walk that would otherwise run tens of times a second. Sampling on
+ * ingest rather than on a timer also means the sweep only happens while the
+ * feed is actually delivering — an hour with no data records no queue reading,
+ * which is the honest result.
+ */
+function sampleQueueDepthHourly(nowMs = Date.now()) {
+  const hour = Math.floor(nowMs / 3_600_000);
+  if (hour === _queueSampledHour) return;
+  _queueSampledHour = hour;
+
+  let waiting = 0;
+  for (const row of _aisStreamVessels.values()) {
+    if (isQueued(row)) waiting += 1;
+  }
+  recordQueueDepth(waiting, nowMs);
 }
 
 function pruneAisStreamCache() {

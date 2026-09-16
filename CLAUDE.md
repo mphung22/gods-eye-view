@@ -64,6 +64,38 @@ Memory: capped at 2,000 events, pruned to the same 24h window as the vessel
 cache — roughly 500KB worst case, which is immaterial against the limit below.
 Tuning: `AIS_GAP_MIN_SEC` (default 3600).
 
+Each gap carries a `classification`. The straight line between two fixes is the
+SHORTEST path a vessel could have taken, so `impliedSpeedKts` is a LOWER bound
+on its real speed — exceeding `AIS_MAX_PLAUSIBLE_KTS` (30) is therefore positive
+evidence that an endpoint is fabricated, not just that the ship was quick. Those
+are `spoofed`; the rest are `dark`. The Gulf is under heavy GNSS spoofing, so
+pooling the two would measure neither. Filter with `?class=dark|spoofed`.
+
+## Hormuz time series (added September 2026)
+
+`server/providers/vessels/ais-timeseries.js` keeps hourly counters that outlive
+the 24h vessel cache: gate crossings in and out, dark and spoofed gaps, and
+queue depth. `GET /api/ais-live/timeseries` (`?hours=`, `?by=day`).
+
+- **A transit is a line crossing**, not a presence count — a meridian at 56.5°E
+  between 25.8°N and 26.9°N, requiring BOTH fixes in the latitude band.
+  Counting vessels inside a box would conflate one ship loitering all day with
+  twenty passing through. The gate approximates a diagonal traffic separation
+  scheme, so it is a consistent relative measure, not an authoritative count.
+- **Queue depth** is vessels stopped (≤0.5 kts) in the Gulf of Oman approaches.
+  `isQueued` rejects a null speed BEFORE `Number()` — the store writes
+  `speed: null` whenever the AIS message carried no SOG, and `Number(null)` is
+  `0`, which would have counted most of the cache as "waiting".
+- **Coverage ships with every response.** A restart leaves a hole, and a quiet
+  server reads exactly like a quiet strait; the counts must never travel alone.
+- Stored in its OWN file (`/var/data/hormuz-timeseries.json`,
+  `AIS_TIMESERIES_PATH`) because the vessel snapshot is a self-pruning 24h cache
+  and this is a two-year record that cannot be rebuilt. One retention rule must
+  not be able to delete the other's data.
+
+This record cannot be backfilled, which changes the cost of the memory-limit
+restarts below: each one now punches a hole in an unrecoverable dataset.
+
 ## Known issue: memory-limit restarts
 
 `AISSTREAM_STALE_MS` was earlier extended from 30 minutes to 24 hours (keeps

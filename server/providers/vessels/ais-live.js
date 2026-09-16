@@ -16,11 +16,14 @@ import {
   startAisPersistence,
 } from './ais-persist.js';
 import {
+  AIS_GAP_CLASSES,
   AIS_GAP_REGIONS,
   aisGapCount,
+  aisGapCounts,
   gapMinSeconds,
   listAisGaps,
 } from './ais-gaps.js';
+import { listDays, listHours, observedCoverage } from './ais-timeseries.js';
 // ---------------------------------------------------------------------------
 // AISStream live vessel cache state
 // ---------------------------------------------------------------------------
@@ -121,6 +124,38 @@ export function aisLiveProxy() {
           return;
         }
 
+        // Hourly/daily Hormuz counters, same prefix-match reasoning as /track.
+        if (
+          incoming.pathname === '/timeseries' ||
+          incoming.pathname.startsWith('/timeseries/')
+        ) {
+          const windowHours = clampInt(
+            incoming.searchParams.get('hours'),
+            1,
+            24 * 365 * 2,
+            24 * 30,
+          );
+          const daily = incoming.searchParams.get('by') === 'day';
+          const sinceHour = Math.floor(Date.now() / 3_600_000) - windowHours;
+
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(
+            JSON.stringify({
+              rows: daily ? listDays({ sinceHour }) : listHours({ sinceHour }),
+              interval: daily ? 'day' : 'hour',
+              windowHours,
+              // Never ship the counts without the coverage. A restart leaves a
+              // hole, and a quiet server reads exactly like a quiet strait.
+              coverage: observedCoverage(windowHours),
+              gate: 'meridian 56.5E, 25.8N-26.9N (approximate)',
+              source: 'AISStream (accumulated locally)',
+            }),
+          );
+          return;
+        }
+
         // Gaps sub-route, same prefix-match reasoning as /track above.
         if (
           incoming.pathname === '/gaps' ||
@@ -148,7 +183,24 @@ export function aisLiveProxy() {
             24,
             24,
           );
-          const gaps = listAisGaps({
+          const requestedClass = String(
+            incoming.searchParams.get('class') || '',
+          ).trim();
+          if (
+            requestedClass &&
+            !Object.hasOwn(AIS_GAP_CLASSES, requestedClass)
+          ) {
+            res.statusCode = 400;
+            res.end(
+              JSON.stringify({
+                error: `unknown class; known classes: ${Object.keys(AIS_GAP_CLASSES).join(', ')}`,
+                gaps: [],
+              }),
+            );
+            return;
+          }
+
+          const query = {
             region: region || undefined,
             sinceSec: Math.floor(Date.now() / 1000) - windowHours * 3600,
             minDurationSec: clampInt(
@@ -157,6 +209,10 @@ export function aisLiveProxy() {
               86400,
               gapMinSeconds(),
             ),
+          };
+          const gaps = listAisGaps({
+            ...query,
+            classification: requestedClass || undefined,
             limit: clampInt(incoming.searchParams.get('limit'), 1, 1000, 200),
           });
 
@@ -164,6 +220,9 @@ export function aisLiveProxy() {
           res.end(
             JSON.stringify({
               gaps,
+              // Counted before any class filter, so the split is readable in
+              // one request rather than two that could straddle a prune.
+              counts: aisGapCounts(query),
               region: region ? AIS_GAP_REGIONS[region] : null,
               windowHours,
               // Detection only sees silences that BEGAN while this process was
