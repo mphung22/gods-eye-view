@@ -1,0 +1,62 @@
+# Render Blueprint — provisions the chokepoint collector and its database.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo.
+# Render reads this file and creates both resources. The only thing it asks
+# you for is AISSTREAM_API_KEY, because `sync: false` deliberately keeps that
+# secret out of the repo.
+#
+# This Blueprint does NOT touch the existing gods-eye-view globe service. It
+# only adds the collector, which is the point of the split: the collector
+# should keep running while the globe gets redeployed.
+
+databases:
+  - name: chokepoint-db
+    databaseName: chokepoints
+    user: collector
+    # ⚠️ DO NOT run this on the free plan for real collection.
+    #
+    # Render's free Postgres EXPIRES, and the whole premise of this dataset is
+    # that it cannot be rebuilt — whatever was not recorded as it happened is
+    # gone forever. A database that deletes itself on a timer is the single
+    # worst place to keep it. A paid tier also brings the automated backups
+    # that are currently the project's only copy of the data.
+    #
+    # Plan names drift. If Render rejects this one, pick the cheapest paid
+    # Postgres in the dropdown — any of them is far more capacity than a few
+    # hundred rows a day needs.
+    plan: basic-256mb
+    postgresMajorVersion: "16"
+
+services:
+  - type: web
+    name: chokepoint-collector
+    runtime: node
+    plan: starter
+    # The collector lives in a subdirectory of the globe's repo.
+    rootDir: collector
+    buildCommand: npm install
+    startCommand: npm start
+    # /health reports the size of every bounded structure in the process, so a
+    # slow memory leak shows up as a failing health check rather than as an
+    # out-of-memory restart that silently holes the record.
+    healthCheckPath: /health
+    # Without this filter, every push that touches the globe redeploys the
+    # collector too — and a redeploy is a gap in a dataset that cannot be
+    # backfilled. This one line is most of what the split buys you.
+    buildFilter:
+      paths:
+        - collector/**
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: chokepoint-db
+          property: connectionString
+      # Prompted for at deploy time; never stored in the repo.
+      - key: AISSTREAM_API_KEY
+        sync: false
+      # Stamped onto every raw row. Bump it whenever a gate moves or a
+      # detection threshold changes, so the boundary is visible in the data.
+      - key: RULES_VERSION
+        value: r1
+      - key: FLUSH_INTERVAL_MS
+        value: "30000"
