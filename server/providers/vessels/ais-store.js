@@ -10,9 +10,18 @@ import {
   isQueued,
   recordGapForHour,
   recordQueueDepth,
+  recordRegionObservation,
   recordTransit,
 } from './ais-timeseries.js';
-import { CHOKEPOINTS } from './chokepoints.js';
+import { CHOKEPOINTS, insideBox } from './chokepoints.js';
+import { recordCrossing } from './ais-crossings.js';
+import {
+  isTanker,
+  ladenState,
+  lengthFromDimension,
+  sizeClassFromLength,
+  approxKdwt,
+} from './vessel-class.js';
 export const AISSTREAM_CACHE_MAX = 50000;
 export const AISSTREAM_STALE_MS = 24 * 60 * 60 * 1000;
 // Per-MMSI recent-path ring buffers (PRD WS-F F3). Float32 lat/lon (~1m
@@ -67,6 +76,14 @@ export function ingestAisStreamEnvelope(envelope) {
       type: vesselTypeFromAis(message, _aisStreamStatic.get(mmsi)),
       destination: stringValue(message.Destination),
       imo: stringValue(message.ImoNumber ?? message.IMO),
+      // Reported draught and hull length arrive in this same message and were
+      // previously discarded. Together they separate a laden tanker from one
+      // running empty, which is the difference between oil moving and a hull
+      // repositioning. Stored raw; interpreted in vessel-class.js.
+      draught: numberValue(
+        message.MaximumStaticDraught ?? message.Draught ?? message.draught,
+      ),
+      length: lengthFromDimension(message.Dimension),
     };
     _aisStreamStatic.set(mmsi, staticData);
     mergeAisStaticIntoLiveVessel(mmsi, staticData);
@@ -101,6 +118,10 @@ export function ingestAisStreamEnvelope(envelope) {
     // Use the AIS message's own report time, not server ingest wall-clock —
     // trail spacing and dead reckoning depend on true fix epochs.
     last_position_epoch: aisEpochSeconds(metadata.time_utc ?? metadata.TimeUtc),
+    // Position reports carry neither, so these ride along from the last
+    // static report this vessel sent.
+    draught: numberValue(staticData.draught),
+    length: numberValue(staticData.length),
     _updatedAt: Date.now(),
   };
 
@@ -119,8 +140,29 @@ export function ingestAisStreamEnvelope(envelope) {
   // A transit is counted where it happens, between two consecutive fixes. The
   // same pair of rows answers both questions, so neither needs its own sweep.
   const crossing = findGateCrossing(previous, row);
-  if (crossing) recordTransit(crossing.chokepoint, crossing.direction);
+  if (crossing) {
+    const tanker = isTanker(row.type);
+    recordTransit(crossing.chokepoint, crossing.direction, Date.now(), {
+      tanker,
+      laden: tanker ? ladenState(row.draught, row.length) : null,
+      kdwt: tanker ? approxKdwt(sizeClassFromLength(row.length)) : 0,
+    });
+    // The raw row, so a corrected gate or a revised laden threshold can be
+    // replayed over history instead of only applying going forward.
+    recordCrossing({
+      chokepoint: crossing.chokepoint,
+      direction: crossing.direction,
+      mmsi,
+      epochSec: row.last_position_epoch,
+      lat,
+      lon,
+      type: row.type,
+      draught: row.draught,
+      length: row.length,
+    });
+  }
 
+  observeRegions(mmsi, lat, lon);
   _aisStreamVessels.set(mmsi, row);
   sampleQueueDepthHourly();
 
@@ -237,6 +279,12 @@ function mergeAisStaticIntoLiveVessel(mmsi, staticData) {
   if (staticData.destination && !existing.destination)
     existing.destination = staticData.destination;
   if (staticData.imo && !existing.imo) existing.imo = staticData.imo;
+  // Draught changes between voyages, so a fresher report always wins — unlike
+  // name or IMO, where the first good value is the right one.
+  if (Number.isFinite(staticData.draught))
+    existing.draught = staticData.draught;
+  if (Number.isFinite(staticData.length) && !existing.length)
+    existing.length = staticData.length;
 }
 
 function vesselNameFromAis(metadata, message, staticData = {}) {
@@ -266,6 +314,33 @@ export function aisStreamRows(maxRows) {
   }
   rows.sort((a, b) => b._updatedAt - a._updatedAt);
   return rows.slice(0, maxRows).map(({ _updatedAt, ...row }) => row);
+}
+
+/** @type {Map<string, {hour:number, seen:Set<string>}>} Per-region hourly roster. */
+const _regionSeen = new Map();
+
+/**
+ * Note that the feed delivered a positioned message inside each chokepoint's
+ * region, and how many distinct vessels it has shown there this hour.
+ *
+ * This is the denominator for every transit count. A fall in transits means
+ * one of two opposite things — fewer ships sailed, or fewer ships were
+ * received — and only the ratio can tell them apart. Reception degrades
+ * hardest under the jamming that makes the count interesting in the first
+ * place, so the raw count alone is not safe to trade on.
+ */
+function observeRegions(mmsi, lat, lon) {
+  const hour = Math.floor(Date.now() / 3_600_000);
+  for (const chokepoint of Object.values(CHOKEPOINTS)) {
+    if (!insideBox(lat, lon, chokepoint.region)) continue;
+    let entry = _regionSeen.get(chokepoint.id);
+    if (!entry || entry.hour !== hour) {
+      entry = { hour, seen: new Set() };
+      _regionSeen.set(chokepoint.id, entry);
+    }
+    entry.seen.add(mmsi);
+    recordRegionObservation(chokepoint.id, entry.seen.size);
+  }
 }
 
 /** Epoch hour whose queue depth has already been sampled. */

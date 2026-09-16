@@ -1,6 +1,11 @@
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
+  openSync,
+  readSync,
+  closeSync,
+  statSync,
   readFileSync,
   renameSync,
   writeFileSync,
@@ -12,6 +17,11 @@ import {
   exportTimeseriesState,
   importTimeseriesState,
 } from './ais-timeseries.js';
+import {
+  adoptCrossings,
+  markCrossingsFlushed,
+  pendingCrossings,
+} from './ais-crossings.js';
 
 // Render's persistent disk (mounted at this path in production) is what lets
 // accumulated vessel history survive a restart/redeploy instead of resetting
@@ -23,6 +33,12 @@ const DEFAULT_PERSIST_PATH = '/var/data/ais-vessels.json';
 // that can never be rebuilt. Sharing a file would eventually mean one
 // retention rule quietly deleting the other's data.
 const DEFAULT_TIMESERIES_PATH = '/var/data/hormuz-timeseries.json';
+// The crossing archive is append-only JSONL rather than a rewritten blob: it
+// grows without bound by design, and rewriting tens of megabytes every five
+// minutes would be real I/O and real CPU on a 0.5-CPU instance.
+const DEFAULT_CROSSINGS_PATH = '/var/data/chokepoint-crossings.jsonl';
+/** Most bytes read back at startup. The file may be far larger. */
+const CROSSINGS_TAIL_BYTES = 8 * 1024 * 1024;
 const SAVE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
 /** @type {number|null} */
@@ -31,12 +47,20 @@ let _saveTimer = null;
 let _persistPath = null;
 /** @type {string|null} */
 let _timeseriesPath = null;
+/** @type {string|null} */
+let _crossingsPath = null;
 let _shutdownHooksArmed = false;
 
 function persistPath() {
   if (_persistPath) return _persistPath;
   _persistPath = process.env.AIS_PERSIST_PATH || DEFAULT_PERSIST_PATH;
   return _persistPath;
+}
+
+function crossingsPath() {
+  if (_crossingsPath) return _crossingsPath;
+  _crossingsPath = process.env.AIS_CROSSINGS_PATH || DEFAULT_CROSSINGS_PATH;
+  return _crossingsPath;
 }
 
 function timeseriesPath() {
@@ -97,6 +121,45 @@ export function loadAisStreamStateFromDisk() {
       error?.message || error,
     );
   }
+
+  // Read only the tail. The archive is meant to outgrow memory, so pulling the
+  // whole file into a 512MB instance to keep the last few thousand rows would
+  // defeat the point of appending in the first place.
+  const xPath = crossingsPath();
+  try {
+    if (existsSync(xPath)) {
+      const size = statSync(xPath).size;
+      const take = Math.min(size, CROSSINGS_TAIL_BYTES);
+      const buffer = Buffer.alloc(take);
+      const fd = openSync(xPath, 'r');
+      try {
+        readSync(fd, buffer, 0, take, size - take);
+      } finally {
+        closeSync(fd);
+      }
+      const lines = buffer.toString('utf8').split('\n');
+      // A tail read almost always starts mid-record; that fragment is not JSON.
+      if (take < size) lines.shift();
+      const rows = [];
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          rows.push(JSON.parse(line));
+        } catch {
+          // One corrupt line must not cost the whole archive.
+        }
+      }
+      const adopted = adoptCrossings(rows);
+      if (adopted > 0) {
+        console.log(`[AIS Persistence] Restored ${adopted} gate crossing(s)`);
+      }
+    }
+  } catch (error) {
+    console.warn(
+      '[AIS Persistence] Could not load crossing archive:',
+      error?.message || error,
+    );
+  }
 }
 
 /**
@@ -128,6 +191,24 @@ function saveAisStreamStateToDisk() {
   } catch (error) {
     console.warn(
       '[AIS Persistence] Could not save Hormuz time series:',
+      error?.message || error,
+    );
+  }
+
+  const xPath = crossingsPath();
+  try {
+    const pending = pendingCrossings();
+    if (pending.length) {
+      mkdirSync(dirname(xPath), { recursive: true });
+      appendFileSync(
+        xPath,
+        pending.map((row) => JSON.stringify(row)).join('\n') + '\n',
+      );
+      markCrossingsFlushed(pending.length);
+    }
+  } catch (error) {
+    console.warn(
+      '[AIS Persistence] Could not append crossings:',
       error?.message || error,
     );
   }

@@ -558,5 +558,8 @@
   "src/tooling/aisGaps.test.mjs",
   "server/providers/vessels/ais-timeseries.js",
   "src/tooling/aisTimeseries.test.mjs",
-  "server/providers/vessels/chokepoints.js"
+  "server/providers/vessels/chokepoints.js",
+  "server/providers/vessels/vessel-class.js",
+  "server/providers/vessels/ais-crossings.js",
+  "src/tooling/vesselClass.test.mjs"
 ]

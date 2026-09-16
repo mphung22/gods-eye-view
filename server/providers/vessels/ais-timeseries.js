@@ -43,8 +43,24 @@ function bucket(chokepoint, atMs) {
       hour,
       outbound: 0,
       inbound: 0,
+      // Tankers separated from everything else: a count mixing them with
+      // bulkers, boxships and tugs is mostly noise for an oil question.
+      outboundTanker: 0,
+      inboundTanker: 0,
+      // Laden vs ballast is the difference between oil leaving and a hull
+      // repositioning. Tankers only; the concept is meaningless elsewhere.
+      outboundLaden: 0,
+      outboundBallast: 0,
+      // Capacity-weighted outbound tankers, thousands of DWT. Ten VLCCs and
+      // ten product tankers are not the same quantity of oil.
+      outboundKdwt: 0,
       dark: 0,
       spoofed: 0,
+      // The denominator. Transits can fall because fewer ships sailed OR
+      // because we saw fewer ships, and those lead to opposite conclusions.
+      // Jamming degrades reception in exactly the places that matter most.
+      messages: 0,
+      vessels: 0,
       // null, not 0: "never sampled" and "sampled, found nothing waiting" are
       // different facts, and a chart that renders them the same lies.
       queueDepth: null,
@@ -147,10 +163,42 @@ export function isQueued(row, chokepoint) {
  * @param {'inbound'|'outbound'} direction Crossing direction.
  * @param {number} [atMs] Wall-clock milliseconds.
  */
-export function recordTransit(chokepoint, direction, atMs = Date.now()) {
+export function recordTransit(
+  chokepoint,
+  direction,
+  atMs = Date.now(),
+  detail = {},
+) {
   if (direction !== 'inbound' && direction !== 'outbound') return;
   if (!chokepointById(chokepoint)) return;
-  bucket(chokepoint, atMs)[direction] += 1;
+  const row = bucket(chokepoint, atMs);
+  row[direction] += 1;
+
+  if (!detail.tanker) return;
+  row[direction === 'outbound' ? 'outboundTanker' : 'inboundTanker'] += 1;
+  if (direction !== 'outbound') return;
+  if (detail.laden === 'laden') row.outboundLaden += 1;
+  else if (detail.laden === 'ballast') row.outboundBallast += 1;
+  if (Number.isFinite(detail.kdwt)) row.outboundKdwt += detail.kdwt;
+}
+
+/**
+ * Record that the feed delivered a positioned message inside a chokepoint's
+ * region, and how many distinct vessels have been seen there this hour.
+ *
+ * @param {string} chokepoint Chokepoint id.
+ * @param {number} distinctVessels Distinct MMSIs seen in region this hour.
+ * @param {number} [atMs] Wall-clock milliseconds.
+ */
+export function recordRegionObservation(
+  chokepoint,
+  distinctVessels,
+  atMs = Date.now(),
+) {
+  if (!chokepointById(chokepoint)) return;
+  const row = bucket(chokepoint, atMs);
+  row.messages += 1;
+  if (Number.isFinite(distinctVessels)) row.vessels = distinctVessels;
 }
 
 /**
@@ -230,18 +278,38 @@ export function listDays(query = {}) {
         date: new Date(day * 86_400_000).toISOString().slice(0, 10),
         outbound: 0,
         inbound: 0,
+        outboundTanker: 0,
+        inboundTanker: 0,
+        outboundLaden: 0,
+        outboundBallast: 0,
+        outboundKdwt: 0,
         dark: 0,
         spoofed: 0,
+        messages: 0,
+        vessels: 0,
         queueDepth: null,
         hoursObserved: 0,
         queueHours: 0,
       };
       days.set(key, entry);
     }
-    entry.outbound += row.outbound;
-    entry.inbound += row.inbound;
-    entry.dark += row.dark;
-    entry.spoofed += row.spoofed;
+    for (const field of [
+      'outbound',
+      'inbound',
+      'outboundTanker',
+      'inboundTanker',
+      'outboundLaden',
+      'outboundBallast',
+      'outboundKdwt',
+      'dark',
+      'spoofed',
+      'messages',
+    ]) {
+      entry[field] += row[field] || 0;
+    }
+    // Distinct vessels do not sum across hours — the same ship recurs. The
+    // busiest hour is the honest floor for the day.
+    entry.vessels = Math.max(entry.vessels, row.vessels || 0);
     entry.hoursObserved += 1;
     if (row.queueDepth !== null) {
       const total = (entry.queueDepth ?? 0) * entry.queueHours + row.queueDepth;
@@ -314,8 +382,15 @@ export function importTimeseriesState(state) {
       hour: row.hour,
       outbound: Number(row.outbound) || 0,
       inbound: Number(row.inbound) || 0,
+      outboundTanker: Number(row.outboundTanker) || 0,
+      inboundTanker: Number(row.inboundTanker) || 0,
+      outboundLaden: Number(row.outboundLaden) || 0,
+      outboundBallast: Number(row.outboundBallast) || 0,
+      outboundKdwt: Number(row.outboundKdwt) || 0,
       dark: Number(row.dark) || 0,
       spoofed: Number(row.spoofed) || 0,
+      messages: Number(row.messages) || 0,
+      vessels: Number(row.vessels) || 0,
       queueDepth: Number.isFinite(row.queueDepth) ? row.queueDepth : null,
       queueSamples: Number(row.queueSamples) || 0,
     });

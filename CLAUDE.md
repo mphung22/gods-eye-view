@@ -108,6 +108,49 @@ consistent relative measure, not an authoritative tally.
   and this is a two-year record that cannot be rebuilt. One retention rule must
   not be able to delete the other's data.
 
+Hourly row: `outbound`/`inbound`, `outboundTanker`/`inboundTanker`,
+`outboundLaden`/`outboundBallast`, `outboundKdwt`, `dark`/`spoofed`,
+`messages`/`vessels`, `queueDepth`.
+
+**The denominator matters most.** Transits can fall because fewer ships sailed
+OR because fewer were received, and those lead to opposite conclusions.
+Reception degrades hardest under the same jamming that makes the count
+interesting, so `transits / vessels` is the robust series and raw transits is
+not safe to trade on alone.
+
+## Crossing archive (added September 2026)
+
+`server/providers/vessels/ais-crossings.js` keeps every individual gate
+crossing — MMSI, time, position, direction, and the raw reported `type`,
+`draught` and `length`. `GET /api/ais-live/crossings`.
+
+The hourly counters are lossy by design, and every gate is an approximation. If
+a gate turns out to be misplaced or a laden threshold wrong, this archive is
+what makes the history **re-derivable** rather than lost. So rows store only
+raw reported values; interpretation lives in `vessel-class.js` and is applied
+on read, never baked in.
+
+Append-only JSONL at `/var/data/chokepoint-crossings.jsonl`
+(`AIS_CROSSINGS_PATH`): rewriting tens of megabytes every five minutes would be
+real I/O and CPU on a 0.5-CPU instance. Memory holds a bounded recent window
+(100k rows); startup reads only the last 8 MB of the file, discarding the
+partial first record.
+
+## Laden vs ballast (vessel-class.js)
+
+`MaximumStaticDraught` and `Dimension` arrive in the `ShipStaticData` message
+the store already parses and were previously discarded. Length is `A + B`.
+
+Laden and ballast draughts both scale with hull length, so the **ratio**
+separates them without a per-class table: a VLCC runs ~22 m on ~330 m (0.067)
+laden and ~9 m (0.027) in ballast; an MR ~11 m on ~180 m (0.061) and ~6 m
+(0.033). Thresholds are 0.055 laden / 0.040 ballast, with a deliberate gap so a
+part-loaded vessel is not forced into a bucket.
+
+⚠️ Draught, dimensions and ship type are all **self-reported by the crew**.
+They go stale, get typed wrong, and a vessel with something to hide can simply
+lie. Use them distributionally across many hulls, never to judge one ship.
+
 This record cannot be backfilled, which changes the cost of the memory-limit
 restarts below: each one now punches a hole in an unrecoverable dataset.
 

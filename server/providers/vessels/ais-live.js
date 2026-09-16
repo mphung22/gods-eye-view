@@ -25,6 +25,8 @@ import {
 } from './ais-gaps.js';
 import { listDays, listHours, observedCoverage } from './ais-timeseries.js';
 import { CHOKEPOINT_IDS, chokepointById } from './chokepoints.js';
+import { crossingCount, listCrossings } from './ais-crossings.js';
+import { ladenState, sizeClassFromLength } from './vessel-class.js';
 
 /**
  * Describe a chokepoint's gate for the API, so a caller reading counts can see
@@ -138,6 +140,65 @@ export function aisLiveProxy() {
               samples: readAisTrack(mmsi),
               source: 'AISStream (accumulated since server start)',
               retainedSec: Math.floor(AISSTREAM_STALE_MS / 1000),
+            }),
+          );
+          return;
+        }
+
+        // Raw crossing archive, same prefix-match reasoning as /track.
+        if (
+          incoming.pathname === '/crossings' ||
+          incoming.pathname.startsWith('/crossings/')
+        ) {
+          const which = String(
+            incoming.searchParams.get('chokepoint') || '',
+          ).trim();
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          if (which && !chokepointById(which)) {
+            res.statusCode = 400;
+            res.end(
+              JSON.stringify({
+                error: `unknown chokepoint; known: ${CHOKEPOINT_IDS.join(', ')}`,
+                crossings: [],
+              }),
+            );
+            return;
+          }
+
+          const windowHours = clampInt(
+            incoming.searchParams.get('hours'),
+            1,
+            24 * 90,
+            24,
+          );
+          const rows = listCrossings({
+            chokepoint: which || undefined,
+            direction:
+              incoming.searchParams.get('direction') === 'inbound'
+                ? 'inbound'
+                : incoming.searchParams.get('direction') === 'outbound'
+                  ? 'outbound'
+                  : undefined,
+            sinceSec: Math.floor(Date.now() / 1000) - windowHours * 3600,
+            limit: clampInt(incoming.searchParams.get('limit'), 1, 5000, 500),
+          });
+
+          res.statusCode = 200;
+          res.end(
+            JSON.stringify({
+              // Raw reported values, plus the derived reading alongside rather
+              // than instead — so a revised threshold can be replayed over the
+              // archive without the originals having been overwritten.
+              crossings: rows.map((row) => ({
+                ...row,
+                sizeClass: sizeClassFromLength(row.length),
+                laden: ladenState(row.draught, row.length),
+              })),
+              windowHours,
+              retainedInMemory: crossingCount(),
+              note: 'draught, length and type are self-reported; sizeClass and laden are estimates',
+              source: 'AISStream (gate crossings)',
             }),
           );
           return;
