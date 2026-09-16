@@ -168,6 +168,32 @@ on a restart. Revisit if these restarts start happening often:
 - Shrink `AISSTREAM_CACHE_MAX` and/or `AISSTREAM_STALE_MS` back down in
   `server/providers/vessels/ais-store.js`.
 
+## How work gets done on this project (read first)
+
+The owner works from a phone, over Chrome Remote Desktop into a Windows
+machine. Anything involving a browser — Render dashboard, AISStream console,
+GitHub UI, the live globe — happens in a Claude with computer access running
+on that machine, not in this session.
+
+**So: whenever a task needs a browser or a dashboard, output a single
+copy-pasteable block addressed to that browser-side Claude.** Not a
+description of the steps, not a numbered list for a human to interpret — a
+block that can be selected and pasted in one go. Assume it starts with no
+context from this conversation.
+
+A good handoff block:
+- states the exact target (service name, URL, which tab)
+- names what must NOT be touched, since it shares a dashboard with live services
+- says precisely what to report back, and asks for raw output rather than a
+  summary when the numbers are the point
+- includes screenshots as a deliverable where a visual check is faster than a
+  described one
+
+**The browser-side Claude will not type or paste credentials**, even when
+explicitly authorized. That is a hard rule, not a one-off caution. Write
+handoff blocks so a human pastes any key or token directly into the field,
+and never route a secret through either assistant.
+
 ## Working on this repo
 
 - Repo: https://github.com/mphung22/gods-eye-view — a fork of
