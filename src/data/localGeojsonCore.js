@@ -72,6 +72,34 @@ export function localInfrastructureOverlayCopy(properties, layerId) {
       )
       .join(' · ');
     if (line) details.push(clampCardLine(line));
+  } else if (layerId === 'local-realestate') {
+    const headline = [
+      titleCaseStatus(props.status),
+      compactMoney(props.list_price),
+      Number.isFinite(Number(props.days_on_market))
+        ? `${Number(props.days_on_market)} DOM`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    if (headline) details.push(clampCardLine(headline));
+
+    const shape = [
+      Number.isFinite(Number(props.beds)) ? `${Number(props.beds)}bd` : '',
+      Number.isFinite(Number(props.baths)) ? `${Number(props.baths)}ba` : '',
+      Number.isFinite(Number(props.sqft))
+        ? `${Number(props.sqft).toLocaleString('en-US')} sqft`
+        : '',
+    ]
+      .filter(Boolean)
+      .join(' · ');
+    if (shape) details.push(clampCardLine(shape));
+
+    // The rent-to-price ratio is the one number that makes two listings at
+    // different prices comparable, so it is worth its own line when both
+    // inputs are present. Anything else is arithmetic the reader has to do.
+    const ratio = rentToPriceRatio(props.rent_estimate, props.list_price);
+    if (ratio) details.push(clampCardLine(`Rent/price ${ratio}`));
   } else if (layerId === 'local-dams') {
     const river = firstClean([
       tags.associated_river,
@@ -1222,6 +1250,13 @@ function labelPriorityFromProperties(props, layerId) {
   if (props.output || tags['plant:output:electricity']) score += 120;
   if (layerId === 'local-dams') score += 80;
   if (layerId === 'local-datacenters') score += 60;
+  if (layerId === 'local-realestate') {
+    // A parcel with no price is a pin with nothing to read at a glance, so the
+    // labelled ones win the declutter budget over the bare ones.
+    score += 40;
+    if (Number.isFinite(Number(props.list_price))) score += 30;
+    if (props.status === 'foreclosure') score += 20;
+  }
   return score;
 }
 
@@ -1262,6 +1297,47 @@ function clampLabel(value) {
   return text.length > 34 ? `${text.slice(0, 31)}...` : text;
 }
 
+/**
+ * Title-case a bundled listing status for card copy.
+ * @param {unknown} value Raw `properties.status`.
+ * @returns {string} Display status, or '' when absent.
+ */
+function titleCaseStatus(value) {
+  const text = cleanLabel(value);
+  if (!text) return '';
+  return text.charAt(0).toUpperCase() + text.slice(1).toLowerCase();
+}
+
+/**
+ * Format a price the way a card can hold it: $398K, $1.25M.
+ * @param {unknown} value Raw price.
+ * @returns {string} Compact currency, or '' when not a finite number.
+ */
+function compactMoney(value) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  if (amount >= 1_000_000) {
+    const millions = amount / 1_000_000;
+    return `$${millions >= 10 ? Math.round(millions) : millions.toFixed(2).replace(/\.?0+$/, '')}M`;
+  }
+  if (amount >= 1000) return `$${Math.round(amount / 1000)}K`;
+  return `$${Math.round(amount)}`;
+}
+
+/**
+ * Monthly rent as a percentage of price — the "1% rule" comparison.
+ * @param {unknown} rent Monthly rent estimate.
+ * @param {unknown} price List price.
+ * @returns {string} Formatted percentage, or '' when either input is unusable.
+ */
+function rentToPriceRatio(rent, price) {
+  const monthly = Number(rent);
+  const amount = Number(price);
+  if (!Number.isFinite(monthly) || monthly <= 0) return '';
+  if (!Number.isFinite(amount) || amount <= 0) return '';
+  return `${((monthly / amount) * 100).toFixed(2)}%`;
+}
+
 function clampCardLine(value) {
   const text = cleanLabel(value);
   return text.length > 48 ? `${text.slice(0, 45)}...` : text;
@@ -1270,5 +1346,6 @@ function clampCardLine(value) {
 function layerTitle(layerId) {
   if (layerId === 'local-datacenters') return 'Datacenter';
   if (layerId === 'local-dams') return 'Dam';
+  if (layerId === 'local-realestate') return 'Parcel';
   return 'Feature';
 }

@@ -3,8 +3,10 @@ import { createInfrastructureLayers } from './infrastructure.js';
 import { createFirmsHeatmapLayer } from './firmsHeatmap.js';
 import submarineCablesLayer from './telegeographySubmarineCables.js';
 import gpsInterferenceLayer from './gpsInterference.js';
+import { createRealEstateLayer } from './realEstate.js';
 
 const [datacenters, dams] = createInfrastructureLayers(localGeoJsonServices);
+const realEstate = createRealEstateLayer(localGeoJsonServices);
 
 // Live NASA FIRMS fires (VIIRS ×3 NRT via the /api/firms proxy). The id keeps
 // the historical `local-` prefix for persistence + voice-tool-enum compat,
@@ -22,4 +24,5 @@ export default [
   submarineCablesLayer,
   fires,
   gpsInterferenceLayer,
+  realEstate,
 ];
