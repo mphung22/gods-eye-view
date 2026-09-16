@@ -25,6 +25,8 @@
 // Starter instance that already trips its memory limit (see CLAUDE.md), so the
 // activity ring is 6KB flat and the event log is capped and age-pruned.
 
+import { CHOKEPOINTS, insideBox } from './chokepoints.js';
+
 /** Silence, in AIS report time, before a vessel is considered to have gone dark. */
 export const AIS_GAP_MIN_SEC = 3600;
 /**
@@ -63,19 +65,21 @@ export const AIS_GAP_RETENTION_SEC = 24 * 60 * 60;
 /** Minute buckets in the feed-activity ring. Longer than retention on purpose. */
 const ACTIVITY_MINUTES = 25 * 60;
 
-/** Named regions, so a caller can ask for a chokepoint by name. */
-export const AIS_GAP_REGIONS = Object.freeze({
-  // The strait plus its approaches: Gulf of Oman through to the lower Persian
-  // Gulf. Wide enough to catch a vessel that goes dark before the transit and
-  // reappears after it, which is the behaviour of interest.
-  hormuz: Object.freeze({
-    name: 'Strait of Hormuz',
-    minLat: 24.0,
-    maxLat: 27.6,
-    minLon: 53.8,
-    maxLon: 58.8,
-  }),
-});
+/**
+ * Named regions, so a caller can ask for a chokepoint by name.
+ *
+ * Derived from the shared registry rather than restated here: a gate and the
+ * water it is analysed over must describe the same place, and two hand-kept
+ * copies of a bounding box eventually disagree.
+ */
+export const AIS_GAP_REGIONS = Object.freeze(
+  Object.fromEntries(
+    Object.values(CHOKEPOINTS).map((chokepoint) => [
+      chokepoint.id,
+      Object.freeze({ name: chokepoint.name, ...chokepoint.region }),
+    ]),
+  ),
+);
 
 /** @type {Uint32Array} Minute bucket -> epoch minute it last recorded. */
 let _activityRing = new Uint32Array(ACTIVITY_MINUTES);
@@ -263,14 +267,27 @@ export function recordAisGap(event, nowMs = Date.now()) {
  * @returns {boolean} True when the gap touches the box.
  */
 export function gapTouchesBox(event, box) {
-  const inside = (lat, lon) =>
-    lat >= box.minLat &&
-    lat <= box.maxLat &&
-    lon >= box.minLon &&
-    lon <= box.maxLon;
   return (
-    inside(event.startLat, event.startLon) || inside(event.endLat, event.endLon)
+    insideBox(event.startLat, event.startLon, box) ||
+    insideBox(event.endLat, event.endLon, box)
   );
+}
+
+/**
+ * Which chokepoint's water a gap happened in.
+ *
+ * A spoofed endpoint can land anywhere, so the two ends can disagree; the
+ * first match wins and the registry order decides. That is good enough for a
+ * counter and deliberately not presented as an authoritative attribution.
+ *
+ * @param {object} event Gap event.
+ * @returns {string|null} Chokepoint id, or null when outside all of them.
+ */
+export function gapChokepoint(event) {
+  for (const chokepoint of Object.values(CHOKEPOINTS)) {
+    if (gapTouchesBox(event, chokepoint.region)) return chokepoint.id;
+  }
+  return null;
 }
 
 /**

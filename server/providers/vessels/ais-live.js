@@ -24,6 +24,25 @@ import {
   listAisGaps,
 } from './ais-gaps.js';
 import { listDays, listHours, observedCoverage } from './ais-timeseries.js';
+import { CHOKEPOINT_IDS, chokepointById } from './chokepoints.js';
+
+/**
+ * Describe a chokepoint's gate for the API, so a caller reading counts can see
+ * the line they were measured across and which direction carries the cargo.
+ * @param {object} chokepoint Registry entry.
+ * @returns {object} Serializable summary.
+ */
+function describeChokepoint(chokepoint) {
+  const { axis, line, bandMin, bandMax } = chokepoint.gate;
+  const unit = axis === 'lat' ? 'N' : 'E';
+  const bandUnit = axis === 'lat' ? 'E' : 'N';
+  return {
+    id: chokepoint.id,
+    name: chokepoint.name,
+    watch: chokepoint.watch,
+    gate: `${axis} ${line}${unit}, ${bandMin}-${bandMax}${bandUnit} (approximate)`,
+  };
+}
 // ---------------------------------------------------------------------------
 // AISStream live vessel cache state
 // ---------------------------------------------------------------------------
@@ -137,19 +156,40 @@ export function aisLiveProxy() {
           );
           const daily = incoming.searchParams.get('by') === 'day';
           const sinceHour = Math.floor(Date.now() / 3_600_000) - windowHours;
+          const which = String(
+            incoming.searchParams.get('chokepoint') || '',
+          ).trim();
 
-          res.statusCode = 200;
           res.setHeader('Content-Type', 'application/json; charset=utf-8');
           res.setHeader('Cache-Control', 'no-store');
+          if (which && !chokepointById(which)) {
+            res.statusCode = 400;
+            res.end(
+              JSON.stringify({
+                error: `unknown chokepoint; known: ${CHOKEPOINT_IDS.join(', ')}`,
+                rows: [],
+              }),
+            );
+            return;
+          }
+
+          const query = { sinceHour, chokepoint: which || undefined };
+          res.statusCode = 200;
           res.end(
             JSON.stringify({
-              rows: daily ? listDays({ sinceHour }) : listHours({ sinceHour }),
+              rows: daily ? listDays(query) : listHours(query),
               interval: daily ? 'day' : 'hour',
               windowHours,
+              chokepoints: which
+                ? [describeChokepoint(chokepointById(which))]
+                : CHOKEPOINT_IDS.map((id) =>
+                    describeChokepoint(chokepointById(id)),
+                  ),
               // Never ship the counts without the coverage. A restart leaves a
               // hole, and a quiet server reads exactly like a quiet strait.
-              coverage: observedCoverage(windowHours),
-              gate: 'meridian 56.5E, 25.8N-26.9N (approximate)',
+              coverage: observedCoverage(windowHours, {
+                chokepoint: which || undefined,
+              }),
               source: 'AISStream (accumulated locally)',
             }),
           );

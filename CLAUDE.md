@@ -40,8 +40,8 @@ persistence was added across three files:
 `server/providers/vessels/ais-gaps.js` records the silences: when a vessel stops
 broadcasting and later comes back, the gap is stored with both endpoints, the
 distance covered while dark, and the speed that implies. Exposed at
-`GET /api/ais-live/gaps` — `?region=hormuz` for the Strait of Hormuz and its
-approaches, plus `hours`, `minSec` and `limit`.
+`GET /api/ais-live/gaps` — `?region=` for a chokepoint's water (see the table
+below), plus `hours`, `minSec`, `class` and `limit`.
 
 Two clocks are used and they are NOT interchangeable:
 
@@ -71,18 +71,33 @@ evidence that an endpoint is fabricated, not just that the ship was quick. Those
 are `spoofed`; the rest are `dark`. The Gulf is under heavy GNSS spoofing, so
 pooling the two would measure neither. Filter with `?class=dark|spoofed`.
 
-## Hormuz time series (added September 2026)
+## Chokepoint time series (added September 2026)
 
 `server/providers/vessels/ais-timeseries.js` keeps hourly counters that outlive
 the 24h vessel cache: gate crossings in and out, dark and spoofed gaps, and
-queue depth. `GET /api/ais-live/timeseries` (`?hours=`, `?by=day`).
+queue depth. `GET /api/ais-live/timeseries` (`?hours=`, `?by=day`,
+`?chokepoint=`).
 
-- **A transit is a line crossing**, not a presence count — a meridian at 56.5°E
-  between 25.8°N and 26.9°N, requiring BOTH fixes in the latitude band.
-  Counting vessels inside a box would conflate one ship loitering all day with
-  twenty passing through. The gate approximates a diagonal traffic separation
-  scheme, so it is a consistent relative measure, not an authoritative count.
-- **Queue depth** is vessels stopped (≤0.5 kts) in the Gulf of Oman approaches.
+Three chokepoints, defined once in `chokepoints.js` and shared by both the gap
+regions and the gate counting so the two can never describe different water:
+
+| id | Gate | Watch |
+| --- | --- | --- |
+| `hormuz` | meridian 56.5E, 25.8-26.9N | `outbound` — laden Gulf exports |
+| `babelmandeb` | parallel 12.6N, 43.1-43.5E | `both` — a through-route, not a terminal |
+| `bosphorus` | parallel 41.15N, 28.95-29.25E | `outbound` — Russian/Kazakh crude, Ukrainian grain |
+
+`enclosedDirection` names the way across the line that heads toward the
+enclosed sea; crossings that way are `inbound`. Every gate approximates a
+traffic separation scheme that really runs at an angle, so counts are a
+consistent relative measure, not an authoritative tally.
+
+- **A transit is a line crossing**, not a presence count, requiring BOTH fixes
+  inside the gate's band. Counting vessels inside a box would conflate one ship
+  loitering all day with twenty passing through.
+- **Queue depth** is vessels stopped (≤0.5 kts) in each chokepoint's approaches
+  — Gulf of Oman, Gulf of Aden, and the Black Sea anchorage north of the
+  Bosphorus. One walk of the cache tests every chokepoint per row.
   `isQueued` rejects a null speed BEFORE `Number()` — the store writes
   `speed: null` whenever the AIS message carried no SOG, and `Number(null)` is
   `0`, which would have counted most of the cache as "waiting".

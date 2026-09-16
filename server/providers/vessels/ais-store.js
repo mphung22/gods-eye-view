@@ -1,16 +1,18 @@
 import { isRecognizedAisEnvelope } from '../../../src/data/aisStreamAdapter.js';
 import {
   evaluateAisGap,
+  gapChokepoint,
   recordAisFeedActivity,
   recordAisGap,
 } from './ais-gaps.js';
 import {
-  gateCrossing,
+  findGateCrossing,
   isQueued,
   recordGapForHour,
   recordQueueDepth,
   recordTransit,
 } from './ais-timeseries.js';
+import { CHOKEPOINTS } from './chokepoints.js';
 export const AISSTREAM_CACHE_MAX = 50000;
 export const AISSTREAM_STALE_MS = 24 * 60 * 60 * 1000;
 // Per-MMSI recent-path ring buffers (PRD WS-F F3). Float32 lat/lon (~1m
@@ -107,13 +109,17 @@ export function ingestAisStreamEnvelope(envelope) {
   const gap = evaluateAisGap(previous, row);
   if (gap) {
     recordAisGap(gap);
-    recordGapForHour(gap.classification);
+    // Gaps are kept globally but only counted per hour where they can be
+    // attributed to a chokepoint; a silence in the mid-Atlantic is not a
+    // Hormuz data point.
+    const where = gapChokepoint(gap);
+    if (where) recordGapForHour(where, gap.classification);
   }
 
   // A transit is counted where it happens, between two consecutive fixes. The
   // same pair of rows answers both questions, so neither needs its own sweep.
-  const crossing = gateCrossing(previous, row);
-  if (crossing) recordTransit(crossing);
+  const crossing = findGateCrossing(previous, row);
+  if (crossing) recordTransit(crossing.chokepoint, crossing.direction);
 
   _aisStreamVessels.set(mmsi, row);
   sampleQueueDepthHourly();
@@ -279,11 +285,20 @@ function sampleQueueDepthHourly(nowMs = Date.now()) {
   if (hour === _queueSampledHour) return;
   _queueSampledHour = hour;
 
-  let waiting = 0;
+  // One walk of the cache, every chokepoint tested per row — a second sweep
+  // per chokepoint would multiply the only expensive operation here.
+  const waiting = new Map();
+  for (const chokepoint of Object.values(CHOKEPOINTS))
+    waiting.set(chokepoint, 0);
   for (const row of _aisStreamVessels.values()) {
-    if (isQueued(row)) waiting += 1;
+    for (const chokepoint of waiting.keys()) {
+      if (isQueued(row, chokepoint))
+        waiting.set(chokepoint, waiting.get(chokepoint) + 1);
+    }
   }
-  recordQueueDepth(waiting, nowMs);
+  for (const [chokepoint, count] of waiting) {
+    recordQueueDepth(chokepoint.id, count, nowMs);
+  }
 }
 
 function pruneAisStreamCache() {

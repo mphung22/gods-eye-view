@@ -42,6 +42,7 @@
       "server/providers/vessels/ais-store.js",
       "server/providers/vessels/ais-live.js",
       "server/providers/vessels/ais-persist.js",
+      "server/providers/vessels/chokepoints.js",
       "server/providers/vessels/ais-gaps.js",
       "server/providers/vessels/ais-timeseries.js",
       "src/data/adsbLolFallback.js",
