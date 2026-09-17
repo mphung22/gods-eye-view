@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   CHOKEPOINTS,
   distanceToGateKm,
+  PRIMARY_CHOKEPOINT,
   subscriptionBoxes,
 } from '../src/domain/chokepoints.js';
 import {
@@ -316,4 +317,63 @@ test('diagnostics reports the box coverage was actually observed in', () => {
   // delivered. The gap between the two is the whole point.
   assert.deepEqual(observedBox, { minLat: 42.5, maxLat: 44, minLon: 30, maxLon: 34 });
   assert.notEqual(observedBox.minLat, CHOKEPOINTS.bosphorus.region.minLat);
+});
+
+test('the Cape is the primary series and its gate spans both routings', () => {
+  assert.equal(PRIMARY_CHOKEPOINT, 'goodhope');
+  assert.equal(
+    Object.values(CHOKEPOINTS).filter((c) => c.primary).length,
+    1,
+    'exactly one chokepoint may be primary',
+  );
+
+  const gate = CHOKEPOINTS.goodhope.gate;
+  // Westbound ships ride the Agulhas Current close inshore; eastbound stand
+  // well south to escape it. Both have to be inside the band or the count
+  // measures one direction and calls it a trend.
+  assert.equal(gateSide(gate, -35.2, gate.line + 0.5, BAND), 'high');
+  assert.equal(gateSide(gate, -39.0, gate.line - 0.5, BAND), 'low');
+  // And the band must stay inside the subscribed region, or the gate watches
+  // water the feed was never asked for.
+  const { region } = CHOKEPOINTS.goodhope;
+  assert.ok(gate.bandMin >= region.minLat && gate.bandMax <= region.maxLat);
+});
+
+test('Algoa Bay bunkering is counted as a queue', () => {
+  const ingest = createIngest();
+  const stopped = (mmsi, lat, lon) =>
+    ingest.handle(
+      {
+        MessageType: 'PositionReport',
+        MetaData: { MMSI: mmsi, latitude: lat, longitude: lon, time_utc: new Date(NOW).toISOString() },
+        Message: { PositionReport: { Sog: 0.1 } },
+      },
+      NOW,
+    );
+
+  stopped('bunker-1', -33.9, 25.9);
+  stopped('bunker-2', -33.95, 26.1);
+  // Nothing is recorded yet: the fix table is still cold, and a sweep now
+  // would report an anchorage that had not finished being observed.
+  assert.equal(ingest.drain().regionHours.find((r) => r.chokepoint === 'goodhope')
+    ?.queueDepth ?? null, null);
+  // A ship under way past the cape is not bunkering. This one also arrives
+  // past the warm-up, so it is the envelope that triggers the first sweep.
+  const warm = NOW + 31 * MINUTE;
+  ingest.handle(
+    {
+      MessageType: 'PositionReport',
+      MetaData: { MMSI: 'transiting', latitude: -35.4, longitude: 20.5, time_utc: new Date(warm).toISOString() },
+      Message: { PositionReport: { Sog: 13 } },
+    },
+    warm,
+  );
+
+  const cape = ingest.diagnostics(warm).chokepoints.find((c) => c.id === 'goodhope');
+  assert.equal(cape.inQueueBox, 2);
+  assert.equal(cape.received, 3);
+
+  const row = ingest.drain().regionHours.find((r) => r.chokepoint === 'goodhope');
+  assert.equal(row.queueDepth, 2);
+  assert.equal(row.queueSamples, 1);
 });

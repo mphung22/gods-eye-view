@@ -16,12 +16,21 @@ hole in the record.
 | Strait of Hormuz | meridian 56.5°E, 25.8–26.9°N | `outbound` — laden Gulf exports |
 | Bab el-Mandeb | parallel 12.6°N, 43.1–43.5°E | `both` — a through-route |
 | Bosphorus | parallel 41.15°N, 28.95–29.25°E | `outbound` — Russian/Kazakh crude, Ukrainian grain |
-| Cape of Good Hope | meridian 20.0°E, 38–34°S | `both` — **reroute detector** |
+| **Cape of Good Hope** | **meridian 20.0°E, 40–33°S** | **`both` — PRIMARY, reroute detector** |
 
-The Cape is not a chokepoint. Rising traffic there against falling traffic at
-Bab el-Mandeb means cargo is going around Africa: longer voyages, more
-tonne-miles, firmer tanker rates. Both falling together means cargo is not
-moving at all, which is the opposite trade.
+The Cape is not a chokepoint, and since r2 it is the **primary** series.
+Rising traffic there against falling traffic at Bab el-Mandeb means cargo is
+going around Africa: longer voyages, more tonne-miles, firmer tanker rates.
+Both falling together means cargo is not moving at all, which is the opposite
+trade. The full argument is in [`docs/CAPE-THESIS.md`](../docs/CAPE-THESIS.md).
+
+It is primary for a reason about the **feed**, not about shipping. AISStream
+leans on satellite reception, which is weakest in crowded coastal straits and
+strongest where hulls are far apart under clear sky. The first three hours of
+collection bore that out — the Cape delivered more messages per hour than any
+other region here, including the Bosphorus, while Hormuz and Bab el-Mandeb
+delivered none at all. A gate is only worth watching in water the feed can
+hear.
 
 Per chokepoint it keeps individual **crossings**, AIS **gaps** (silences),
 hourly **region counters** (messages received, distinct vessels, queue depth)

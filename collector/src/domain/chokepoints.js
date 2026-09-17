@@ -70,25 +70,57 @@ export const CHOKEPOINTS = Object.freeze({
   goodhope: Object.freeze({
     id: 'goodhope',
     name: 'Cape of Good Hope',
-    // Not a chokepoint — a REROUTE DETECTOR. When Bab el-Mandeb closes,
-    // cargo goes around Africa. Rising traffic here against falling traffic
-    // there means rerouting: longer voyages, more tonne-miles, firmer tanker
-    // rates. Both falling together means cargo is not moving at all, which is
-    // the opposite trade.
+    // Not a chokepoint — a REROUTE DETECTOR, and as of r2 the PRIMARY series.
+    //
+    // When Bab el-Mandeb closes, cargo goes around Africa. Rising traffic here
+    // against falling traffic there means rerouting: longer voyages, more
+    // tonne-miles, firmer tanker rates. Both falling together means cargo is
+    // not moving at all, which is the opposite trade.
+    //
+    // It is primary for a reason that is about the FEED rather than about
+    // shipping: this is open ocean. AISStream leans on satellite reception,
+    // which is weakest in crowded coastal straits and strongest where hulls
+    // are far apart under clear sky. Three hours of collection bore that out —
+    // the Cape delivered more messages per hour than any other region here,
+    // including the Bosphorus. A gate is only worth watching in water the feed
+    // can actually hear.
+    primary: true,
     watch: 'both',
-    region: Object.freeze({ minLat: -40.0, maxLat: -30.0, minLon: 14.0, maxLon: 24.0 }),
-    // A meridian south of the Cape, spanning the deep-water routing well
-    // offshore of coastal traffic.
+    // Extended east to 28E to take in the Algoa Bay anchorage; south to 42S so
+    // weather-routed and deep-draught traffic stays inside the region.
+    region: Object.freeze({ minLat: -42.0, maxLat: -30.0, minLon: 14.0, maxLon: 28.0 }),
+    // A meridian through Cape Agulhas (34.83S, 20.0E), the true southern tip.
+    //
+    // The band runs 33S–40S. Its northern end sits over land, which costs
+    // nothing and guarantees no inshore lane is clipped; the southern end is
+    // deliberately ~575 km off the cape, because westbound ships ride the
+    // Agulhas Current close in while eastbound ships stand well south to
+    // escape it. A band sized for one of those directions would count only
+    // half the traffic and call the result a trend.
     gate: Object.freeze({
       axis: 'lon',
       line: 20.0,
-      bandMin: -38.0,
-      bandMax: -34.0,
+      bandMin: -40.0,
+      bandMax: -33.0,
+      // Westward across the meridian is toward the Atlantic — the direction
+      // Asia-to-Europe cargo takes when it gives up on Suez.
       enclosedDirection: 'decreasing',
     }),
-    queueBox: null,
+    // Algoa Bay, off Gqeberha: the bunkering anchorage for Cape traffic, where
+    // ships stop to refuel rather than to wait out a closure. Queue depth here
+    // reads as demand for the long way round, not as congestion.
+    queueBox: Object.freeze({ minLat: -34.2, maxLat: -33.6, minLon: 25.5, maxLon: 26.5 }),
   }),
 });
+
+/**
+ * The chokepoint whose series is the headline, when a reader needs one.
+ *
+ * Named rather than assumed: a consumer that silently picks the first key
+ * would change meaning the next time the registry is reordered.
+ */
+export const PRIMARY_CHOKEPOINT =
+  Object.values(CHOKEPOINTS).find((c) => c.primary)?.id ?? null;
 
 export const CHOKEPOINT_IDS = Object.freeze(Object.keys(CHOKEPOINTS));
 

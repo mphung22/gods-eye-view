@@ -36,6 +36,14 @@ const MAX_STATIC = 60_000;
  * all, not whether a particular hull was about to transit.
  */
 const NEAR_GATE_KM = 50;
+/**
+ * How long the collector must have been ingesting before a queue depth counts.
+ * The fix table needs time to refill after a restart, and a sweep over a cold
+ * table understates an anchorage in a way nothing downstream could detect.
+ */
+const QUEUE_WARMUP_MS = 30 * 60 * 1000;
+/** Minimum spacing between queue sweeps; the hour's depth averages them. */
+const QUEUE_SAMPLE_MS = 10 * 60 * 1000;
 
 function pruneMap(map, ttlMs, maxSize, nowMs, stamp) {
   const cutoff = nowMs - ttlMs;
@@ -146,7 +154,9 @@ export function createIngest(options = {}) {
   let serviceHours = new Map();
   /** @type {Map<string, Set<string>>} `${chokepoint}|${hourIso}` -> MMSIs. */
   const regionSeen = new Map();
-  let queueSampledHour = -1;
+  /** Wall clock of the first usable envelope, for the warm-up gate. */
+  let firstIngestMs = null;
+  let lastQueueSampleMs = null;
 
   function hourIso(nowMs) {
     return new Date(Math.floor(nowMs / 3_600_000) * 3_600_000).toISOString();
@@ -181,16 +191,29 @@ export function createIngest(options = {}) {
   }
 
   /**
-   * Sweep for waiting vessels, at most once an hour.
+   * Sweep for waiting vessels.
    *
    * Sampling from the ingest path rather than a timer means the sweep only
    * happens while the feed is delivering, so an hour with no data records no
    * queue reading — which is the honest result rather than a zero.
+   *
+   * Two rules make the reading mean what it says:
+   *
+   * A queue is counted out of the fix table, so its depth is only as complete
+   * as that table. Straight after a restart the table is nearly empty, and a
+   * sweep then returns a small number that looks exactly like an anchorage
+   * emptying out. So nothing is recorded until the process has been ingesting
+   * for WARMUP — a depth we could not have observed is not reported at all,
+   * the same rule the gap detector already follows.
+   *
+   * And once warm it samples on an interval rather than once per hour, so the
+   * hour's figure is an average of several sweeps instead of a single instant
+   * that happened to be the first message after the clock ticked over.
    */
   function sampleQueues(nowMs) {
-    const hour = Math.floor(nowMs / 3_600_000);
-    if (hour === queueSampledHour) return;
-    queueSampledHour = hour;
+    if (firstIngestMs === null || nowMs - firstIngestMs < QUEUE_WARMUP_MS) return;
+    if (lastQueueSampleMs !== null && nowMs - lastQueueSampleMs < QUEUE_SAMPLE_MS) return;
+    lastQueueSampleMs = nowMs;
 
     const counts = new Map();
     for (const chokepoint of Object.values(CHOKEPOINTS)) counts.set(chokepoint, 0);
@@ -226,6 +249,7 @@ export function createIngest(options = {}) {
       const record = parseEnvelope(envelope);
       if (!record) return false;
 
+      if (firstIngestMs === null) firstIngestMs = nowMs;
       activity.mark(nowMs);
       noteService(nowMs);
 

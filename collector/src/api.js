@@ -1,5 +1,9 @@
 import { createServer } from 'node:http';
-import { CHOKEPOINT_IDS, chokepointById } from './domain/chokepoints.js';
+import {
+  CHOKEPOINT_IDS,
+  PRIMARY_CHOKEPOINT,
+  chokepointById,
+} from './domain/chokepoints.js';
 import {
   readCoverage,
   readCrossings,
@@ -72,6 +76,7 @@ export function createApi({ pool, ingest, stream, config }) {
         // be compared by hand is one that does not get run.
         send(res, 200, {
           keyConfigured: Boolean(config.aisKey),
+          primary: PRIMARY_CHOKEPOINT,
           stream: stream?.status?.() ?? null,
           ...(ingest?.diagnostics?.() ?? {}),
         });
@@ -84,6 +89,7 @@ export function createApi({ pool, ingest, stream, config }) {
           rows: await readHours(pool, { chokepoint, hours }),
           coverage: await readCoverage(pool, hours),
           chokepoints: CHOKEPOINT_IDS,
+          primary: PRIMARY_CHOKEPOINT,
           rulesVersion: config.rulesVersion,
         });
         return;
