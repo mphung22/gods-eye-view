@@ -13,6 +13,7 @@ import {
 } from '../src/domain/transits.js';
 import { createFeedActivity, evaluateGap, haversineKm } from '../src/domain/gaps.js';
 import { createIngest, lengthFromDimension, parseEnvelope } from '../src/ingest.js';
+import { CODE_RULES_VERSION, loadConfig } from '../src/config.js';
 
 const MINUTE = 60_000;
 const NOW = Date.UTC(2026, 8, 16, 12, 0, 0);
@@ -376,4 +377,26 @@ test('Algoa Bay bunkering is counted as a queue', () => {
   const row = ingest.drain().regionHours.find((r) => r.chokepoint === 'goodhope');
   assert.equal(row.queueDepth, 2);
   assert.equal(row.queueSamples, 1);
+});
+
+test('a stale RULES_VERSION is reported, never silently obeyed', () => {
+  const base = { DATABASE_URL: 'postgres://x' };
+
+  // Unset: the code's own version, and nothing to warn about.
+  const fresh = loadConfig(base);
+  assert.equal(fresh.rulesVersion, CODE_RULES_VERSION);
+  assert.equal(fresh.rulesVersionOverridden, null);
+
+  // Matching: still nothing to warn about.
+  assert.equal(
+    loadConfig({ ...base, RULES_VERSION: CODE_RULES_VERSION }).rulesVersionOverridden,
+    null,
+  );
+
+  // Stale: the deployment stamps rows with a ruleset this code does not
+  // implement. Honoured, because an override has legitimate uses — but the
+  // disagreement travels with the config so boot and /health can say so.
+  const stale = loadConfig({ ...base, RULES_VERSION: 'r1' });
+  assert.equal(stale.rulesVersion, 'r1');
+  assert.equal(stale.rulesVersionOverridden, CODE_RULES_VERSION);
 });

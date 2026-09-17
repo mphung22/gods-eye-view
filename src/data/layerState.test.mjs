@@ -157,8 +157,12 @@ function encode(state) {
 
 test('production registry is exact, canonical, and rejects incomplete contracts', async () => {
   assert.equal(validateLayerStateRegistry(), true);
-  assert.equal(REGISTERED_LAYER_IDS.length, 17);
-  assert.equal(new Set(REGISTERED_LAYER_IDS).size, 17);
+  // A deliberate tripwire: adding a layer has to be a conscious edit here
+  // rather than something that rides along silently. Both assertions read one
+  // constant so they cannot drift apart and half-pass.
+  const EXPECTED_LAYER_COUNT = 18;
+  assert.equal(REGISTERED_LAYER_IDS.length, EXPECTED_LAYER_COUNT);
+  assert.equal(new Set(REGISTERED_LAYER_IDS).size, EXPECTED_LAYER_COUNT);
   assert.deepEqual(REGISTERED_LAYER_IDS, [...REGISTERED_LAYER_IDS].sort());
   assert.throws(
     () => validateLayerStateRegistry([...LAYER_STATE_REGISTRY, LAYER_STATE_REGISTRY[0]]),

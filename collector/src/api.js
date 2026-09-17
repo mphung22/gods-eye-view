@@ -62,6 +62,9 @@ export function createApi({ pool, ingest, stream, config }) {
         send(res, 200, {
           ok: true,
           rulesVersion: config.rulesVersion,
+          // Non-null means the environment is stamping rows with a ruleset
+          // this code does not implement.
+          rulesVersionShouldBe: config.rulesVersionOverridden,
           stream: stream?.status?.() ?? null,
           ingest: ingest?.stats?.() ?? null,
           uptimeSec: Math.round(process.uptime()),

@@ -12,6 +12,16 @@ const pool = createPool(config);
 // how a revised threshold reaches the whole history.
 await migrate(pool);
 console.log(`[collector] schema ready, rules ${config.rulesVersion}`);
+if (config.rulesVersionOverridden) {
+  // Loud on purpose. Rows written now will claim to come from a ruleset that
+  // is not the one running, and nothing downstream can detect that later.
+  console.warn(
+    `[collector] ⚠️  RULES_VERSION is set to "${config.rulesVersion}" but this ` +
+      `code implements "${config.rulesVersionOverridden}". Rows are being ` +
+      `stamped with the wrong ruleset. Unset RULES_VERSION, or set it to ` +
+      `"${config.rulesVersionOverridden}".`,
+  );
+}
 
 const ingest = createIngest({ rulesVersion: config.rulesVersion });
 const stream = startAisStream(config, (envelope) => ingest.handle(envelope));
