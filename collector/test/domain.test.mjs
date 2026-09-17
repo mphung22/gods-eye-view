@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CHOKEPOINTS, subscriptionBoxes } from '../src/domain/chokepoints.js';
+import {
+  CHOKEPOINTS,
+  distanceToGateKm,
+  subscriptionBoxes,
+} from '../src/domain/chokepoints.js';
 import {
   DEFAULT_HYSTERESIS_DEG,
   createTransitDetector,
@@ -218,4 +222,98 @@ test('ingest reports the size of every bounded structure', () => {
   assert.equal(stats.rememberedFixes, 1);
   assert.equal(stats.trackedVessels, 1);
   assert.equal(typeof stats.staticRecords, 'number');
+});
+
+test('distance to a gate measures past the line and outside the band', () => {
+  const gate = CHOKEPOINTS.bosphorus.gate;
+  // On the line, inside the lane band: zero by construction.
+  assert.equal(distanceToGateKm(gate, gate.line, 29.1), 0);
+
+  // A tenth of a degree north of a latitude gate is ~11 km, whichever
+  // longitude inside the band it sits at.
+  const north = distanceToGateKm(gate, gate.line + 0.1, 29.1);
+  assert.ok(north > 10 && north < 12, `expected ~11 km, got ${north}`);
+
+  // Outside the band the across-axis offset counts too, so a vessel level
+  // with the line but far along the coast is not "at the gate".
+  const aside = distanceToGateKm(gate, gate.line, 34.0);
+  assert.ok(aside > 350, `expected a few hundred km, got ${aside}`);
+
+  // Longitude degrees are narrower at 41N than at the equator; a gate on a
+  // meridian must not over-report distance because of it.
+  const capeGate = CHOKEPOINTS.goodhope.gate;
+  const east = distanceToGateKm(capeGate, -36, capeGate.line + 1);
+  assert.ok(east > 85 && east < 95, `expected ~90 km, got ${east}`);
+});
+
+/** Feed one position fix through a fresh ingest. */
+function fix(ingest, mmsi, lat, lon, atMs = NOW) {
+  ingest.handle(
+    {
+      MessageType: 'PositionReport',
+      MetaData: { MMSI: mmsi, latitude: lat, longitude: lon, time_utc: new Date(atMs).toISOString() },
+      Message: { PositionReport: { Sog: 12 } },
+    },
+    atMs,
+  );
+}
+
+const verdictFor = (ingest, id) =>
+  ingest.diagnostics(NOW).chokepoints.find((c) => c.id === id);
+
+test('diagnostics separates no coverage from coverage that misses the gate', () => {
+  const ingest = createIngest();
+  // Vessels scattered across the open Black Sea, hundreds of km from the
+  // strait — exactly the shape a satellite-only feed produces.
+  fix(ingest, 'openwater-1', 44.0, 34.0);
+  fix(ingest, 'openwater-2', 43.2, 31.5);
+
+  const bosphorus = verdictFor(ingest, 'bosphorus');
+  assert.equal(bosphorus.received, 2);
+  assert.equal(bosphorus.nearGate, 0);
+  assert.ok(bosphorus.nearestGateKm > 200);
+  assert.match(bosphorus.verdict, /^COVERAGE OFF-GATE/);
+
+  // A region with nothing received at all is a different failure and must
+  // not be reported with the same words.
+  assert.equal(verdictFor(ingest, 'hormuz').received, 0);
+  assert.match(verdictFor(ingest, 'hormuz').verdict, /^NO COVERAGE/);
+});
+
+test('diagnostics distinguishes at-the-gate, one-sided and healthy', () => {
+  const margin = createIngest();
+  // Inside the hysteresis margin: at the gate, but no side is settled, so no
+  // crossing can ever be credited from this alone.
+  fix(margin, 'drifting', CHOKEPOINTS.bosphorus.gate.line, 29.08);
+  const undecided = verdictFor(margin, 'bosphorus');
+  assert.equal(undecided.nearGate, 1);
+  assert.equal(undecided.settledLow + undecided.settledHigh, 0);
+  assert.match(undecided.verdict, /^AT GATE/);
+
+  const oneSided = createIngest();
+  fix(oneSided, 'south', 41.10, 29.08);
+  const south = verdictFor(oneSided, 'bosphorus');
+  assert.equal(south.settledLow, 1);
+  assert.equal(south.settledHigh, 0);
+  assert.match(south.verdict, /^ONE-SIDED/);
+
+  const both = createIngest();
+  fix(both, 'south', 41.10, 29.08);
+  fix(both, 'north', 41.20, 29.08);
+  const healthy = verdictFor(both, 'bosphorus');
+  assert.equal(healthy.settledLow, 1);
+  assert.equal(healthy.settledHigh, 1);
+  assert.match(healthy.verdict, /^HEALTHY/);
+});
+
+test('diagnostics reports the box coverage was actually observed in', () => {
+  const ingest = createIngest();
+  fix(ingest, 'a', 44.0, 34.0);
+  fix(ingest, 'b', 42.5, 30.0);
+
+  const { observedBox } = verdictFor(ingest, 'bosphorus');
+  // Not the subscribed region — the corner of the water that actually
+  // delivered. The gap between the two is the whole point.
+  assert.deepEqual(observedBox, { minLat: 42.5, maxLat: 44, minLon: 30, maxLon: 34 });
+  assert.notEqual(observedBox.minLat, CHOKEPOINTS.bosphorus.region.minLat);
 });

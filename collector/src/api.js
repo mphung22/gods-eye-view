@@ -66,6 +66,18 @@ export function createApi({ pool, ingest, stream, config }) {
         return;
       }
 
+      if (url.pathname === '/diagnostics') {
+        // Deliberately answers in one call. Every round trip here costs a
+        // person a browser session, so a diagnostic split across three URLs to
+        // be compared by hand is one that does not get run.
+        send(res, 200, {
+          keyConfigured: Boolean(config.aisKey),
+          stream: stream?.status?.() ?? null,
+          ...(ingest?.diagnostics?.() ?? {}),
+        });
+        return;
+      }
+
       if (url.pathname === '/hours' || url.pathname === '/') {
         const hours = intParam(params, 'hours', 1, 24 * 365 * 2, 720);
         send(res, 200, {
@@ -117,7 +129,7 @@ export function createApi({ pool, ingest, stream, config }) {
 
       send(res, 404, {
         error: 'not found',
-        routes: ['/health', '/hours', '/days', '/crossings', '/gaps'],
+        routes: ['/health', '/diagnostics', '/hours', '/days', '/crossings', '/gaps'],
       });
     } catch (error) {
       console.error('[api]', error?.message || error);

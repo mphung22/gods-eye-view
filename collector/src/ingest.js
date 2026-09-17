@@ -10,7 +10,11 @@
 // of them are a transit; one INSERT per message would spend the database on
 // nothing.
 
-import { CHOKEPOINTS, insideBox } from './domain/chokepoints.js';
+import {
+  CHOKEPOINTS,
+  distanceToGateKm,
+  insideBox,
+} from './domain/chokepoints.js';
 import { createTransitDetector } from './domain/transits.js';
 import { createFeedActivity, evaluateGap } from './domain/gaps.js';
 
@@ -26,6 +30,12 @@ const MAX_FIXES = 60_000;
  */
 const STATIC_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_STATIC = 60_000;
+/**
+ * How close a received vessel must be to a gate to count as covering it.
+ * Generous on purpose: this is asking whether the feed reaches the strait at
+ * all, not whether a particular hull was about to transit.
+ */
+const NEAR_GATE_KM = 50;
 
 function pruneMap(map, ttlMs, maxSize, nowMs, stamp) {
   const cutoff = nowMs - ttlMs;
@@ -319,6 +329,108 @@ export function createIngest(options = {}) {
       regionHours = new Map();
       serviceHours = new Map();
       return out;
+    },
+
+    /**
+     * Where the feed is actually delivering, per chokepoint.
+     *
+     * The hourly counts answer "how many", and a zero there has two completely
+     * different causes that lead to opposite trades: no ships, or no reception.
+     * `messages` and `vessels` separate those at the REGION level, but a region
+     * is large and a gate is a line across one strait. A healthy vessel count
+     * for the whole Black Sea says nothing about whether anything was received
+     * near Istanbul.
+     *
+     * So this reports the distance from the nearest received vessel to each
+     * gate, and how many vessels the detector has settled on each side of it.
+     * Those two numbers distinguish every way a gate can read zero, and none of
+     * them can be told apart from the counts alone.
+     *
+     * Read from live memory rather than the database: it describes what is
+     * arriving now, which is the question being asked when a count looks wrong.
+     *
+     * @param {number} [nowMs] Wall clock, for reporting only.
+     * @returns {object} Per-chokepoint coverage picture plus a verdict each.
+     */
+    diagnostics(nowMs = Date.now()) {
+      const sides = detector.sideCounts();
+      const slots = Object.values(CHOKEPOINTS).map((chokepoint) => ({
+        chokepoint,
+        received: 0,
+        nearestGateKm: null,
+        nearGate: 0,
+        inQueueBox: 0,
+        box: null,
+      }));
+
+      // One walk of the fix table testing every chokepoint per row, rather
+      // than one walk per chokepoint.
+      for (const fix of fixes.values()) {
+        for (const slot of slots) {
+          const { region, gate, queueBox } = slot.chokepoint;
+          if (!insideBox(fix.lat, fix.lon, region)) continue;
+          slot.received += 1;
+          slot.box = slot.box
+            ? {
+                minLat: Math.min(slot.box.minLat, fix.lat),
+                maxLat: Math.max(slot.box.maxLat, fix.lat),
+                minLon: Math.min(slot.box.minLon, fix.lon),
+                maxLon: Math.max(slot.box.maxLon, fix.lon),
+              }
+            : { minLat: fix.lat, maxLat: fix.lat, minLon: fix.lon, maxLon: fix.lon };
+
+          const km = distanceToGateKm(gate, fix.lat, fix.lon);
+          if (km !== null) {
+            if (slot.nearestGateKm === null || km < slot.nearestGateKm) {
+              slot.nearestGateKm = km;
+            }
+            if (km <= NEAR_GATE_KM) slot.nearGate += 1;
+          }
+          if (insideBox(fix.lat, fix.lon, queueBox)) slot.inQueueBox += 1;
+        }
+      }
+
+      const round = (value, places) =>
+        value === null ? null : Number(value.toFixed(places));
+
+      return {
+        at: new Date(nowMs).toISOString(),
+        nearGateKm: NEAR_GATE_KM,
+        rememberedFixes: fixes.size,
+        chokepoints: slots.map((slot) => {
+          const { id, name } = slot.chokepoint;
+          const side = sides[id] || { low: 0, high: 0 };
+          const settled = side.low + side.high;
+          return {
+            id,
+            name,
+            received: slot.received,
+            nearestGateKm: round(slot.nearestGateKm, 1),
+            nearGate: slot.nearGate,
+            settledLow: side.low,
+            settledHigh: side.high,
+            inQueueBox: slot.inQueueBox,
+            observedBox: slot.box
+              ? {
+                  minLat: round(slot.box.minLat, 2),
+                  maxLat: round(slot.box.maxLat, 2),
+                  minLon: round(slot.box.minLon, 2),
+                  maxLon: round(slot.box.maxLon, 2),
+                }
+              : null,
+            verdict:
+              slot.received === 0
+                ? 'NO COVERAGE — nothing received anywhere in this region'
+                : slot.nearGate === 0
+                  ? `COVERAGE OFF-GATE — ${slot.received} vessel(s) in the region, nearest ${round(slot.nearestGateKm, 0)} km from the gate`
+                  : settled === 0
+                    ? `AT GATE — ${slot.nearGate} vessel(s) within ${NEAR_GATE_KM} km, none yet past the hysteresis margin`
+                    : side.low === 0 || side.high === 0
+                      ? `ONE-SIDED — vessels settle only ${side.low ? 'low' : 'high'} of the gate; a crossing needs both`
+                      : `HEALTHY — ${side.low} low / ${side.high} high; crossings should accrue`,
+          };
+        }),
+      };
     },
 
     /** @returns {object} Sizes of every bounded structure, for /health. */

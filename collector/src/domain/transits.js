@@ -125,6 +125,29 @@ export function createTransitDetector(options = {}) {
       return tracked.size;
     },
 
+    /**
+     * How many vessels the detector holds a SETTLED side for, per chokepoint.
+     *
+     * A crossing needs two settled sides in sequence, so this is the upstream
+     * quantity. Both zero means no received vessel has ever been definitively
+     * at the gate, and no amount of waiting will produce a transit — the
+     * counts are measuring reception, not shipping. Both non-zero with no
+     * crossings recorded is a different failure with a different fix: vessels
+     * reach the gate but are never caught on both sides of it.
+     *
+     * @returns {Record<string, {low:number, high:number}>} Keyed by chokepoint.
+     */
+    sideCounts() {
+      const counts = {};
+      for (const chokepoint of gates) counts[chokepoint.id] = { low: 0, high: 0 };
+      for (const entry of tracked.values()) {
+        for (const [id, side] of Object.entries(entry.sides)) {
+          if (counts[id]) counts[id][side] += 1;
+        }
+      }
+      return counts;
+    },
+
     /** @param {number} [nowMs] Wall clock. */
     prune(nowMs = Date.now()) {
       prune(nowMs);

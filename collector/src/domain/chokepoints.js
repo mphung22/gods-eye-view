@@ -121,6 +121,46 @@ export function insideBox(lat, lon, box) {
 }
 
 /**
+ * Distance from a point to the nearest part of a gate.
+ *
+ * A gate is a line SEGMENT — constant along one axis, bounded on the other —
+ * so the distance has two independent components: how far past the line the
+ * point sits, and how far outside the lane band it sits. Collapsing them into
+ * one number is what makes this readable. "The nearest vessel we received is
+ * 180 km from the Bosphorus gate" answers, in a single figure, a question that
+ * otherwise needs a map.
+ *
+ * Degrees are converted flat-earth, which is accurate to well under a percent
+ * at the scale a chokepoint spans and does not need to be better: this is a
+ * coverage diagnostic and never an input to a count.
+ *
+ * @param {object} gate Gate definition.
+ * @param {number} lat Latitude, degrees.
+ * @param {number} lon Longitude, degrees.
+ * @returns {number|null} Kilometres, or null when the point is unusable.
+ */
+export function distanceToGateKm(gate, lat, lon) {
+  if (!gate || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  const along = gate.axis === 'lat' ? lat : lon;
+  const across = gate.axis === 'lat' ? lon : lat;
+
+  const alongOffset = Math.abs(along - gate.line);
+  const acrossOffset =
+    across < gate.bandMin
+      ? gate.bandMin - across
+      : across > gate.bandMax
+        ? across - gate.bandMax
+        : 0;
+
+  const KM_PER_DEG = 111.32;
+  // Longitude degrees shrink toward the poles; latitude degrees do not.
+  const lonScale = KM_PER_DEG * Math.cos((lat * Math.PI) / 180);
+  const alongKm = alongOffset * (gate.axis === 'lat' ? KM_PER_DEG : lonScale);
+  const acrossKm = acrossOffset * (gate.axis === 'lat' ? lonScale : KM_PER_DEG);
+  return Math.hypot(alongKm, acrossKm);
+}
+
+/**
  * AISStream subscription boxes covering every chokepoint region.
  *
  * Subscribing worldwide costs memory and message budget on water nobody here
