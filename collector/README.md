@@ -106,6 +106,32 @@ GET /crossings?chokepoint=&hours=&limit=   raw rows, interpreted on read
 GET /gaps?chokepoint=&class=&hours=        dark / spoofed silences
 ```
 
+## Backups
+
+Render's managed Postgres keeps its own backups and they are fine. They also
+live in the same account as the thing they protect, and this dataset cannot be
+rebuilt — whatever was not recorded as it happened is gone. So it wants one
+copy that survives losing access to Render entirely.
+
+```bash
+export DATABASE_URL='postgresql://...'   # External Connection string
+./scripts/backup.sh ~/chokepoint-backups
+```
+
+The script dumps, then reads the dump back and prints live row counts beside
+it. It exits non-zero rather than reporting success on a file it could not
+parse: an unverified backup is a belief, and a zero-byte file looks exactly
+like a working one from the outside.
+
+**The database is internal-only by default** (`ipAllowList: []` in
+`render.yaml`), which is deliberate — an open Postgres is a bad default even
+behind a strong password. To reach it from a laptop, add your own IP under
+Database → Access Control in the dashboard. Add the single address, not
+`0.0.0.0/0`.
+
+The connection string contains a password. It belongs in your shell or a
+password manager — never in this repository, and never pasted into a chat.
+
 ## Things that will bite you
 
 **The gates are unvalidated.** They are straight lines approximating traffic
