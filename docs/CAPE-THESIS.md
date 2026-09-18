@@ -6,12 +6,36 @@ Written September 2026, at rules version `r3`. This document is the argument
 the data is being gathered to test, written down in advance so that it can be
 shown wrong rather than quietly revised afterwards.
 
-**Status: the pipeline is validated; the signal is not.** The first gate
-crossing was recorded on 18 September 2026 at 10:09 UTC — MMSI 636022259,
-eastbound at 34.38°S 18.17°E, 289 m, 17.3 m draught, enriched and classified,
-17 seconds from observation to row. So the machinery works end to end. What it
-has produced so far is one ship. Everything in §10 still applies before any of
-this is worth money.
+**Status: the pipeline is validated and the rate is usable. The signal is
+still unproven.**
+
+The r3 gate produced five crossings between 10:09 and 13:06 UTC on 18
+September 2026 — **1.7 per hour, about 41 per day.** That is enough events to
+build a daily series on, which the r2 gate at 20.0°E never came close to.
+
+Three were outbound and two inbound, which is the balance a through-route
+should show.
+
+Two things those five rows exposed, both now fixed and both worth recording
+because they were invisible in the aggregates:
+
+- **Two of the five carried no ship type, draught or length at all.** A
+  crossing was enriched only from static reports that happened to arrive
+  before the vessel reached the gate, and that table lived in memory, so every
+  restart reset the miss rate to maximum. Static reports are now persisted and
+  joined on read (`vessel_static`), which recovers vessel IDENTITY — type and
+  length — for past crossings as well as future ones. Draught is deliberately
+  NOT backfilled: it is voyage state, and a report arriving after the crossing
+  may describe the opposite load condition.
+- **Tanker nomenclature was being applied to ships that are not tankers.** A
+  366 m container ship came back `size_class: vlcc`, `laden_state: ballast`,
+  `approx_kdwt: 300`. Container ships are volume-limited rather than
+  weight-limited and sit far shallower for their length, so the tanker ratio
+  reads a normally-loaded boxship as empty. The hourly views already filtered
+  on `is_tanker`, so the aggregates were never wrong — but anyone reading raw
+  rows saw confident nonsense. Those labels are now null for non-tankers.
+
+Everything in §10 still applies before any of this is worth money.
 
 ---
 

@@ -157,6 +157,8 @@ export function createIngest(options = {}) {
 
   let pendingCrossings = [];
   let pendingGaps = [];
+  /** @type {Map<string, object>} mmsi -> static report awaiting a write. */
+  let pendingStatic = new Map();
   /** @type {Map<string, object>} `${chokepoint}|${hourIso}` -> counters. */
   let regionHours = new Map();
   /** @type {Map<string, object>} hourIso -> service liveness. */
@@ -263,6 +265,18 @@ export function createIngest(options = {}) {
       noteService(nowMs);
 
       if (record.isStatic) {
+        // Keyed by mmsi so a vessel reporting repeatedly between flushes
+        // writes once, with its newest values.
+        pendingStatic.set(record.mmsi, {
+          mmsi: record.mmsi,
+          shipType:
+            record.shipType === null || record.shipType === undefined
+              ? null
+              : String(record.shipType),
+          draughtM: record.draught ?? null,
+          lengthM: record.length ?? statics.get(record.mmsi)?.length ?? null,
+          reportedAt: new Date(record.epochSec ? record.epochSec * 1000 : nowMs),
+        });
         statics.set(record.mmsi, {
           shipType: record.shipType,
           // Draught changes between voyages, so a fresher report always wins.
@@ -352,11 +366,13 @@ export function createIngest(options = {}) {
       const out = {
         crossings: pendingCrossings,
         gaps: pendingGaps,
+        vesselStatic: [...pendingStatic.values()],
         regionHours: [...regionHours.values()],
         serviceHours: [...serviceHours.values()],
       };
       pendingCrossings = [];
       pendingGaps = [];
+      pendingStatic = new Map();
       // Hour rows are upserted cumulatively, so they are rebuilt from the
       // live rosters rather than carried forward with stale totals.
       regionHours = new Map();
@@ -492,6 +508,7 @@ export function createIngest(options = {}) {
         staticRecords: statics.size,
         pendingCrossings: pendingCrossings.length,
         pendingGaps: pendingGaps.length,
+        pendingStatic: pendingStatic.size,
       };
     },
   };

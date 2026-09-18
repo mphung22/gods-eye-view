@@ -17,14 +17,45 @@
  * @returns {Promise<{crossings:number, gaps:number, hours:number}>} Counts written.
  */
 export async function writeBatch(pool, batch) {
-  const { crossings = [], gaps = [], regionHours = [], serviceHours = [] } = batch;
-  if (!crossings.length && !gaps.length && !regionHours.length && !serviceHours.length) {
-    return { crossings: 0, gaps: 0, hours: 0 };
+  const {
+    crossings = [],
+    gaps = [],
+    vesselStatic = [],
+    regionHours = [],
+    serviceHours = [],
+  } = batch;
+  if (
+    !crossings.length &&
+    !gaps.length &&
+    !vesselStatic.length &&
+    !regionHours.length &&
+    !serviceHours.length
+  ) {
+    return { crossings: 0, gaps: 0, hours: 0, vesselStatic: 0 };
   }
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    for (const row of vesselStatic) {
+      // Newest report wins: draught changes between voyages and a vessel can
+      // be renamed or re-measured. `reported_at` guards against an
+      // out-of-order frame overwriting fresher values with older ones.
+      await client.query(
+        `INSERT INTO vessel_static
+           (mmsi, ship_type, draught_m, length_m, reported_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5, now())
+         ON CONFLICT (mmsi) DO UPDATE SET
+           ship_type   = coalesce(EXCLUDED.ship_type, vessel_static.ship_type),
+           draught_m   = coalesce(EXCLUDED.draught_m, vessel_static.draught_m),
+           length_m    = coalesce(EXCLUDED.length_m, vessel_static.length_m),
+           reported_at = GREATEST(EXCLUDED.reported_at, vessel_static.reported_at),
+           updated_at  = now()
+         WHERE EXCLUDED.reported_at >= vessel_static.reported_at`,
+        [row.mmsi, row.shipType, row.draughtM, row.lengthM, row.reportedAt],
+      );
+    }
 
     for (const row of crossings) {
       await client.query(
@@ -107,6 +138,7 @@ export async function writeBatch(pool, batch) {
       crossings: crossings.length,
       gaps: gaps.length,
       hours: regionHours.length,
+      vesselStatic: vesselStatic.length,
     };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});

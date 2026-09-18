@@ -259,3 +259,104 @@ test('a batch is all-or-nothing', async () => {
   const { rows } = await pool.query('SELECT count(*)::INT AS n FROM crossings');
   assert.equal(rows[0].n, 0);
 });
+
+test('a later static report fills in identity, but never load state', async () => {
+  const pool = await freshDb();
+
+  // A vessel crosses before anything is known about it. Two of the first five
+  // real crossings looked exactly like this.
+  await writeBatch(pool, {
+    crossings: [
+      crossing({ mmsi: 'anonymous', shipType: null, draughtM: null, lengthM: null }),
+    ],
+  });
+
+  const before = await pool.query(
+    'SELECT ship_type, length_m, is_tanker, identity_backfilled FROM v_crossings',
+  );
+  assert.equal(before.rows[0].ship_type, null);
+  assert.equal(before.rows[0].is_tanker, false);
+  assert.equal(before.rows[0].identity_backfilled, false);
+
+  // Its static report turns up afterwards, carrying a BALLAST draught.
+  await writeBatch(pool, {
+    vesselStatic: [
+      {
+        mmsi: 'anonymous',
+        shipType: '80',
+        draughtM: 9,
+        lengthM: 330,
+        reportedAt: new Date('2026-09-16T18:00:00Z'),
+      },
+    ],
+  });
+
+  const after = await pool.query(
+    `SELECT ship_type, length_m, is_tanker, size_class, laden_state, draught_m,
+            identity_backfilled
+       FROM v_crossings`,
+  );
+  const row = after.rows[0];
+  // Identity recovered: a hull does not change type or grow between voyages.
+  assert.equal(row.ship_type, '80');
+  assert.equal(row.length_m, 330);
+  assert.equal(row.is_tanker, true);
+  assert.equal(row.size_class, 'vlcc');
+  assert.equal(row.identity_backfilled, true);
+
+  // Load state NOT recovered. The ballast draught describes the voyage the
+  // vessel reported it on, which may be the opposite of the one it crossed
+  // in. Filling it would relabel a laden transit as ballast and corrupt the
+  // one series the thesis rests on.
+  assert.equal(row.draught_m, null);
+  assert.equal(row.laden_state, null);
+});
+
+test('tanker nomenclature is not applied to ships that are not tankers', async () => {
+  const pool = await freshDb();
+  await writeBatch(pool, {
+    crossings: [
+      // A 366 m container ship at a normal working draught. The tanker ratio
+      // read this as an empty VLCC carrying 300k dwt.
+      crossing({ mmsi: 'boxship', shipType: '74', draughtM: 14.5, lengthM: 366 }),
+      crossing({ mmsi: 'tanker', shipType: '80', draughtM: 22, lengthM: 330 }),
+    ],
+  });
+
+  const { rows } = await pool.query(
+    'SELECT mmsi, size_class, laden_state, approx_kdwt FROM v_crossings ORDER BY mmsi',
+  );
+  const byMmsi = Object.fromEntries(rows.map((r) => [r.mmsi, r]));
+
+  assert.equal(byMmsi.boxship.size_class, null);
+  assert.equal(byMmsi.boxship.laden_state, null);
+  assert.equal(byMmsi.boxship.approx_kdwt, 0);
+
+  // The tanker is unaffected — the labels still mean what they always meant.
+  assert.equal(byMmsi.tanker.size_class, 'vlcc');
+  assert.equal(byMmsi.tanker.laden_state, 'laden');
+  assert.equal(byMmsi.tanker.approx_kdwt, 300);
+});
+
+test('the hourly view counts what it could not identify', async () => {
+  const pool = await freshDb();
+  await writeBatch(pool, {
+    crossings: [
+      crossing({ mmsi: 'known', shipType: '80', draughtM: 22, lengthM: 330 }),
+      crossing({ mmsi: 'unknown-1', shipType: null, draughtM: null, lengthM: null }),
+      crossing({ mmsi: 'unknown-2', shipType: null, draughtM: null, lengthM: null }),
+    ],
+    regionHours: [
+      { chokepoint: 'hormuz', hour: HOUR, messages: 10, vessels: 3, queueDepth: null, queueSamples: 0 },
+    ],
+    serviceHours: [
+      { hour: HOUR, messages: 10, firstSeen: new Date(HOUR), lastSeen: new Date(HOUR) },
+    ],
+  });
+
+  const { rows } = await pool.query('SELECT outbound, unidentified FROM v_chokepoint_hours');
+  assert.equal(Number(rows[0].outbound), 3);
+  // Without this, a fall in outbound_tanker cannot be told apart from a fall
+  // in how many hulls happened to have sent a static report.
+  assert.equal(Number(rows[0].unidentified), 2);
+});

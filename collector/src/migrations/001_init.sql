@@ -100,7 +100,12 @@ CREATE TABLE IF NOT EXISTS market_hours (
 
 -- AIS ship types 80-89 are tankers, 70-79 general cargo. The field is
 -- self-declared and sometimes text rather than a code.
-CREATE OR REPLACE VIEW v_crossings AS
+DROP VIEW IF EXISTS v_chokepoint_hours;
+DROP VIEW IF EXISTS v_transit_hours;
+DROP VIEW IF EXISTS v_crossings;
+DROP VIEW IF EXISTS v_gaps;
+
+CREATE VIEW v_crossings AS
 SELECT
   c.*,
   CASE
@@ -144,13 +149,13 @@ FROM crossings c;
 -- taken, so implied speed is a LOWER bound on its real speed. Exceeding what a
 -- hull can do is therefore positive evidence a position is fabricated — not
 -- merely that the ship was quick.
-CREATE OR REPLACE VIEW v_gaps AS
+CREATE VIEW v_gaps AS
 SELECT
   g.*,
   CASE WHEN g.implied_speed_kts > 30 THEN 'spoofed' ELSE 'dark' END AS classification
 FROM gaps g;
 
-CREATE OR REPLACE VIEW v_transit_hours AS
+CREATE VIEW v_transit_hours AS
 SELECT
   chokepoint,
   date_trunc('hour', observed_at) AS hour,
@@ -167,7 +172,7 @@ GROUP BY chokepoint, date_trunc('hour', observed_at);
 -- The read most questions start from: counts, denominator and whether we were
 -- even watching, in one row. Coverage travels with the counts by construction
 -- so the two cannot be separated by accident.
-CREATE OR REPLACE VIEW v_chokepoint_hours AS
+CREATE VIEW v_chokepoint_hours AS
 SELECT
   r.chokepoint,
   r.hour,
