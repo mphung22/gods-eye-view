@@ -22,11 +22,36 @@ function send(res, status, body) {
   res.end(payload);
 }
 
+/**
+ * Read a bounded integer query parameter, or its default.
+ *
+ * The absent case has to be tested BEFORE conversion. `Number(null)` is `0`
+ * and `Number('')` is `0`, both finite, so a missing parameter passed the
+ * `isFinite` guard and was clamped to `min` instead of falling through to the
+ * default. Every endpoint served its narrowest possible window, and
+ * `/crossings` — whose `limit` has a floor of 1 — returned exactly one row to
+ * every caller who did not ask for more.
+ *
+ * Nothing about that looked like a failure from the outside: a one-row answer
+ * to "show me the crossings" reads as a collector that has recorded one
+ * crossing.
+ *
+ * @param {URLSearchParams} params Query string.
+ * @param {string} name Parameter name.
+ * @param {number} min Lower clamp.
+ * @param {number} max Upper clamp.
+ * @param {number} fallback Value when absent, blank or unparseable.
+ * @returns {number} The clamped integer.
+ */
 function intParam(params, name, min, max, fallback) {
-  const raw = Number(params.get(name));
-  if (!Number.isFinite(raw)) return fallback;
-  return Math.min(max, Math.max(min, Math.trunc(raw)));
+  const raw = params.get(name);
+  if (raw === null || raw.trim() === '') return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.trunc(parsed)));
 }
+
+export const __testing = { intParam };
 
 /**
  * Read-only HTTP API over the collected data.

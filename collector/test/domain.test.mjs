@@ -14,6 +14,7 @@ import {
 import { createFeedActivity, evaluateGap, haversineKm } from '../src/domain/gaps.js';
 import { createIngest, lengthFromDimension, parseEnvelope } from '../src/ingest.js';
 import { CODE_RULES_VERSION, loadConfig } from '../src/config.js';
+import { __testing as apiTesting } from '../src/api.js';
 
 const MINUTE = 60_000;
 const NOW = Date.UTC(2026, 8, 16, 12, 0, 0);
@@ -422,4 +423,29 @@ test('a stale RULES_VERSION is reported, never silently obeyed', () => {
   const stale = loadConfig({ ...base, RULES_VERSION: 'r1' });
   assert.equal(stale.rulesVersion, 'r1');
   assert.equal(stale.rulesVersionOverridden, CODE_RULES_VERSION);
+});
+
+test('an absent query parameter falls through to its default', () => {
+  const { intParam } = apiTesting;
+  const none = new URLSearchParams('chokepoint=goodhope');
+
+  // The regression: Number(null) is 0 and 0 is finite, so every default was
+  // clamped to min. /crossings served one row to every caller who did not
+  // name a limit, which reads exactly like a collector with one crossing.
+  assert.equal(intParam(none, 'limit', 1, 5000, 500), 500);
+  assert.equal(intParam(none, 'hours', 24, 17520, 2160), 2160);
+  assert.equal(intParam(none, 'hours', 1, 2160, 24), 24);
+
+  // Blank and unparseable are absent too, not zero.
+  assert.equal(intParam(new URLSearchParams('limit='), 'limit', 1, 5000, 500), 500);
+  assert.equal(intParam(new URLSearchParams('limit=%20'), 'limit', 1, 5000, 500), 500);
+  assert.equal(intParam(new URLSearchParams('limit=abc'), 'limit', 1, 5000, 500), 500);
+
+  // An explicit value is still honoured, still clamped, still truncated.
+  assert.equal(intParam(new URLSearchParams('limit=42'), 'limit', 1, 5000, 500), 42);
+  assert.equal(intParam(new URLSearchParams('limit=99999'), 'limit', 1, 5000, 500), 5000);
+  assert.equal(intParam(new URLSearchParams('limit=0'), 'limit', 1, 5000, 500), 1);
+  assert.equal(intParam(new URLSearchParams('limit=7.9'), 'limit', 1, 5000, 500), 7);
+  // And an explicit zero is a real request to clamp, unlike an absent one.
+  assert.equal(intParam(new URLSearchParams('hours=0'), 'hours', 24, 17520, 2160), 24);
 });
