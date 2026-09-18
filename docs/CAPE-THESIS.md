@@ -2,10 +2,16 @@
 
 *Why the primary series moved to a place that is not a chokepoint.*
 
-Written September 2026, at rules version `r3`. **Nothing here is validated
-yet.** The collector has not recorded a single confirmed gate crossing. This
-document is the argument the data is being gathered to test, written down in
-advance so that it can be shown wrong rather than quietly revised afterwards.
+Written September 2026, at rules version `r3`. This document is the argument
+the data is being gathered to test, written down in advance so that it can be
+shown wrong rather than quietly revised afterwards.
+
+**Status: the pipeline is validated; the signal is not.** The first gate
+crossing was recorded on 18 September 2026 at 10:09 UTC — MMSI 636022259,
+eastbound at 34.38°S 18.17°E, 289 m, 17.3 m draught, enriched and classified,
+17 seconds from observation to row. So the machinery works end to end. What it
+has produced so far is one ship. Everything in §10 still applies before any of
+this is worth money.
 
 ---
 
@@ -152,15 +158,37 @@ All of it is already implemented; none of it is validated.
 | `outbound / vessels` | Transits over distinct vessels received | **The robust series.** Reception varies; a raw count cannot tell a quiet sea from a quiet receiver |
 | `outbound_laden` / `outbound_ballast` | Draught-to-length ratio, ≥0.055 laden | Laden westbound is cargo actually moving, not repositioning |
 | `outbound_kdwt` | Approximate deadweight crossing | Tonnes beat hulls; one VLCC is twenty coasters |
-| `queue_depth` | Vessels stopped in Algoa Bay | Bunkering demand — ships refuelling for the long way round |
+| `queue_depth` | Vessels stopped in Table Bay | Ships at anchor off Cape Town, the only anchorage this feed reaches |
 | `dark` / `spoofed` | AIS silences, classified | Sanctioned and evasive tonnage takes this route too |
 | `observed` | Whether the collector was running | Without it every number above is uninterpretable |
 
-**Algoa Bay is the sleeper.** The anchorage off Gqeberha is the main bunkering
-stop for Cape traffic. Ships stopped there are not waiting out a closure — they
-are refuelling *because* they chose the long route. It is a demand proxy that
-is independent of the gate count, which makes it a genuine cross-check rather
-than a second view of the same number.
+**The anchorage is a weaker cross-check than r2 claimed.** Algoa Bay, off
+Gqeberha, is the real bunkering stop for Cape traffic: ships stopped there are
+refuelling *because* they chose the long route, which made it a demand proxy
+independent of the gate count. It is also 400 km outside anything this receiver
+has ever delivered, so r3 watches Table Bay instead. Table Bay mixes bunkering
+with berth-waiting and port calls, so it is a noisier proxy — and since roughly
+90% of all Cape reception is vessels sitting in it, the `vessels` denominator is
+mostly stationary harbour traffic rather than lane traffic. It still detects a
+receiver going down, which is its main job. It does not track lane-specific
+reception, and §6 previously implied it did.
+
+### ⚠️ The tanker filter is a Hormuz assumption, carried to the wrong ocean
+
+`outbound_laden`, `outbound_ballast` and `outbound_kdwt` are all computed
+`FILTER (WHERE ... AND is_tanker)`. That was right when the gate was at Hormuz,
+where laden crude tankers *are* the entire story.
+
+At the Cape it is not right. The Red Sea reroute moved container ships and dry
+bulk at least as much as it moved tankers, and the first crossing this
+collector ever recorded — a 289 m, 17.3 m-draught hull of AIS type 70, almost
+certainly a Capesize bulker — is excluded from every tonnage series by that
+filter. The headline counts (`outbound` / `inbound`) do include it.
+
+So the tonnage series is not *corrupted*, it is *narrow*: it measures the
+tanker slice of a reroute that is mostly not tankers. Widening it is a view
+change, which reclassifies all history and needs no backfill — but it should be
+a deliberate decision recorded here, not a silent edit.
 
 ## 7. The instruments
 
