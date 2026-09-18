@@ -170,7 +170,35 @@ on a restart. Revisit if these restarts start happening often:
 
 ## How work gets done on this project (read first)
 
-The owner works from a phone, over Chrome Remote Desktop into a Windows
+### Explain everything at kid level. Every task, not just when asked.
+
+The owner has asked for this repeatedly and then asked for it to be made
+permanent. It is not a preference about tone — it is how the work gets
+understood and acted on, so treat it as a requirement of the output rather
+than a style note.
+
+What it means in practice:
+
+- **Short sentences. Plain words.** "The antenna can't hear that far" beats
+  "reception is spatially constrained".
+- **One action per step**, numbered, with what they should SEE after doing it.
+  Not a paragraph containing four things.
+- **Say which step is the one that matters**, and which are optional, up front.
+  If they only do one thing, they should know which one.
+- **Concrete pictures over abstractions.** The counting-cars-while-asleep image
+  did more work than any explanation of coverage ratios.
+- **Never condescending.** Simple words, real content. They handle the actual
+  finding fine — it is jargon and stacked clauses that cost them.
+- **Say plainly when something failed, and whose fault it was.** Softened or
+  buried bad news is worse than useless here.
+
+This applies to explanations, walkthroughs, findings and summaries. Code
+comments and commit messages stay technical — those are for whoever reads the
+repository next.
+
+### Browser and dashboard work
+
+The owner usually works from a phone, over Chrome Remote Desktop into a Windows
 machine. Anything involving a browser — Render dashboard, AISStream console,
 GitHub UI, the live globe — happens in a Claude with computer access running
 on that machine, not in this session.
