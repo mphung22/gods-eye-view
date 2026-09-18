@@ -11,7 +11,7 @@
  * /health, because a row stamped with the wrong rules is worse than no row:
  * it claims to be comparable with history it was not produced the same way as.
  */
-export const CODE_RULES_VERSION = 'r2';
+export const CODE_RULES_VERSION = 'r3';
 
 /** Configuration, read once. Missing required values fail loudly at boot. */
 export function loadConfig(env = process.env) {

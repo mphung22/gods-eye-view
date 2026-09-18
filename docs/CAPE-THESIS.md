@@ -2,7 +2,7 @@
 
 *Why the primary series moved to a place that is not a chokepoint.*
 
-Written September 2026, at rules version `r2`. **Nothing here is validated
+Written September 2026, at rules version `r3`. **Nothing here is validated
 yet.** The collector has not recorded a single confirmed gate crossing. This
 document is the argument the data is being gathered to test, written down in
 advance so that it can be shown wrong rather than quietly revised afterwards.
@@ -32,22 +32,48 @@ That is not a bug to fix. It is a fact about the instrument.
 
 ## 2. The reason the Cape wins is about the feed, not about shipping
 
-The obvious fallback was the Bosphorus, which reports plenty of vessels. It is
-the wrong choice, and the reason generalises.
-
-AISStream leans heavily on satellite reception. Satellite AIS is **worst** in
-dense coastal traffic — many transmitters inside one satellite footprint
-collide, and the receiver decodes a fraction of them — and **best** in open
-ocean where hulls are far apart under clear sky. The Bosphorus is a 750-metre
-urban waterway, the hardest possible case. The Cape is deep water with ships
-strung out over hundreds of kilometres, the easiest.
-
-The measured message rates say exactly that: the Cape, despite being nobody's
-idea of a chokepoint, out-delivered every other region watched here.
-
 **So the gate should be placed where the feed can hear, and then asked what it
 can tell us — rather than placed where the story is and asked to perform.**
-That inversion is the substance of this document.
+That inversion is the substance of this document. It is also, as it turned out,
+a rule this document broke on its first attempt.
+
+### What r2 argued, and why it was wrong
+
+r2 claimed the Cape won because it is open ocean, where satellite AIS is strong
+— hulls far apart under clear sky, rather than the message collisions that ruin
+reception in a 750-metre urban waterway like the Bosphorus. The message volume
+seemed to confirm it: the Cape out-delivered every other region watched.
+
+The volume was real. The explanation was not.
+
+`/diagnostics` measured the footprint directly. Over two hours the Cape's
+`observedBox` pushed **south** past Cape Point but barely moved **east**:
+
+```
+-34.79 … -33.70 °N,  17.66 … 18.64 °E
+```
+
+A box that tight, centred on a city, is one **terrestrial receiver near Cape
+Town** with about 60–70 km of reach. It is not satellite coverage of a shipping
+lane. 132 vessels never came within 50 km of r2's gate at 20.0°E, and no amount
+of further waiting was going to change that.
+
+### What r3 measures instead
+
+The gate moved to **18.15°E**, the measured centre of that footprint, with a
+band from just south of Table Bay to the southern edge of observed reach — about
+25 nautical miles below Cape Point.
+
+That is the **inshore portion** of the rounding lane, and the limit deserves to
+be stated plainly rather than buried:
+
+> Deep-draught traffic rounds well south of this gate, and ALL traffic routes
+> further south in heavy weather. So the count under-reads exactly when the
+> Southern Ocean is roughest. That is a seasonal confound baked into the
+> geometry, and the denominator does not correct it.
+
+The tonne-mile mechanism in §3 is unaffected. What changed is the claim about
+what this feed can *see*, which was an assumption presented as a finding.
 
 ## 3. The mechanism
 
@@ -189,9 +215,13 @@ than the counts are.
 
 Listed in advance, so they cannot be explained away later.
 
-- **The gate never validates.** Zero crossings so far, everywhere. If the Cape
-  gate also reads `COVERAGE OFF-GATE`, the thesis dies with the instrument and
-  no amount of reasoning above rescues it.
+- **The gate never validates.** Zero crossings so far, everywhere. r2's gate
+  read `COVERAGE OFF-GATE` and was moved; if r3's does too, the thesis dies
+  with the instrument and no amount of reasoning above rescues it.
+- **Inshore bias.** Even a working r3 gate samples the coastal edge of the
+  rounding lane, not the lane. A consistent sample of a biased slice can still
+  be a usable relative index — but only if the bias is stable, and weather
+  routing means it is not.
 - **No baseline.** "Cape traffic is rising" is meaningless without knowing
   normal. That needs 30+ days before any reading is interpretable, and the data
   cannot be backfilled — it only accrues forward.

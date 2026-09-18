@@ -70,46 +70,60 @@ export const CHOKEPOINTS = Object.freeze({
   goodhope: Object.freeze({
     id: 'goodhope',
     name: 'Cape of Good Hope',
-    // Not a chokepoint — a REROUTE DETECTOR, and as of r2 the PRIMARY series.
+    // Not a chokepoint — a REROUTE DETECTOR, and the PRIMARY series.
     //
     // When Bab el-Mandeb closes, cargo goes around Africa. Rising traffic here
     // against falling traffic there means rerouting: longer voyages, more
     // tonne-miles, firmer tanker rates. Both falling together means cargo is
     // not moving at all, which is the opposite trade.
     //
-    // It is primary for a reason that is about the FEED rather than about
-    // shipping: this is open ocean. AISStream leans on satellite reception,
-    // which is weakest in crowded coastal straits and strongest where hulls
-    // are far apart under clear sky. Three hours of collection bore that out —
-    // the Cape delivered more messages per hour than any other region here,
-    // including the Bosphorus. A gate is only worth watching in water the feed
-    // can actually hear.
+    // r2 made it primary on the theory that this is open ocean, where
+    // satellite AIS is strong, and pointed to the Cape out-delivering every
+    // other region watched. The volume was real; the explanation was wrong.
+    // What delivers it is a terrestrial receiver at Cape Town — see the gate
+    // comment below for how the observed footprint gave that away. It stays
+    // primary because the reception is genuinely there, but it buys a view of
+    // the Cape Peninsula rather than of the Southern Ocean, and every
+    // conclusion drawn here has to be sized to that.
     primary: true,
     watch: 'both',
-    // Extended east to 28E to take in the Algoa Bay anchorage; south to 42S so
-    // weather-routed and deep-draught traffic stays inside the region.
+    // Wider than anything yet received, deliberately: the region is what we
+    // ASK for, and leaving room beyond the current footprint is how a receiver
+    // coming online elsewhere would ever show up in `observedBox`.
     region: Object.freeze({ minLat: -42.0, maxLat: -30.0, minLon: 14.0, maxLon: 28.0 }),
-    // A meridian through Cape Agulhas (34.83S, 20.0E), the true southern tip.
+    // r2 put this meridian through Cape Agulhas (20.0E), the true southern
+    // tip, on the theory that open-ocean satellite reception would cover it.
+    // Two hours of measurement killed that: 132 vessels, none within 50 km,
+    // and an observed box that pushed SOUTH past Cape Point while barely
+    // moving east — 17.66E to 18.64E. That is the footprint of one terrestrial
+    // receiver near Cape Town, not satellite coverage of a shipping lane.
     //
-    // The band runs 33S–40S. Its northern end sits over land, which costs
-    // nothing and guarantees no inshore lane is clipped; the southern end is
-    // deliberately ~575 km off the cape, because westbound ships ride the
-    // Agulhas Current close in while eastbound ships stand well south to
-    // escape it. A band sized for one of those directions would count only
-    // half the traffic and call the result a trend.
+    // So r3 puts the gate at 18.15E, the measured centre of that footprint,
+    // with roughly 45 km of reception either side of the line. The band runs
+    // from just south of Table Bay down to the edge of observed reach, which
+    // is about 25 nautical miles below Cape Point — the inshore portion of the
+    // rounding lane.
+    //
+    // ⚠️ That inshore bias is a real limit on what this can measure. Deep-
+    // draught traffic rounds well south of here, and ALL traffic routes
+    // further south in heavy weather, so the count under-reads exactly when
+    // the Southern Ocean is roughest. It is a seasonal confound baked into the
+    // geometry, not something the denominator corrects.
     gate: Object.freeze({
       axis: 'lon',
-      line: 20.0,
-      bandMin: -40.0,
-      bandMax: -33.0,
+      line: 18.15,
+      bandMin: -34.75,
+      bandMax: -34.05,
       // Westward across the meridian is toward the Atlantic — the direction
       // Asia-to-Europe cargo takes when it gives up on Suez.
       enclosedDirection: 'decreasing',
     }),
-    // Algoa Bay, off Gqeberha: the bunkering anchorage for Cape traffic, where
-    // ships stop to refuel rather than to wait out a closure. Queue depth here
-    // reads as demand for the long way round, not as congestion.
-    queueBox: Object.freeze({ minLat: -34.2, maxLat: -33.6, minLon: 25.5, maxLon: 26.5 }),
+    // Table Bay, not Algoa Bay. Algoa is the better bunkering signal for Cape
+    // traffic and r2 watched it, but it sits 400 km east of anything this feed
+    // has ever delivered — an anchorage we cannot see reports zero forever and
+    // reads as an empty one. Table Bay is inside the receiver's footprint, so
+    // its depth is a number rather than a silence.
+    queueBox: Object.freeze({ minLat: -33.95, maxLat: -33.78, minLon: 18.33, maxLon: 18.52 }),
   }),
 });
 

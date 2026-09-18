@@ -16,7 +16,7 @@ hole in the record.
 | Strait of Hormuz | meridian 56.5°E, 25.8–26.9°N | `outbound` — laden Gulf exports |
 | Bab el-Mandeb | parallel 12.6°N, 43.1–43.5°E | `both` — a through-route |
 | Bosphorus | parallel 41.15°N, 28.95–29.25°E | `outbound` — Russian/Kazakh crude, Ukrainian grain |
-| **Cape of Good Hope** | **meridian 20.0°E, 40–33°S** | **`both` — PRIMARY, reroute detector** |
+| **Cape of Good Hope** | **meridian 18.15°E, 34.75–34.05°S** | **`both` — PRIMARY, reroute detector** |
 
 The Cape is not a chokepoint, and since r2 it is the **primary** series.
 Rising traffic there against falling traffic at Bab el-Mandeb means cargo is
@@ -24,13 +24,20 @@ going around Africa: longer voyages, more tonne-miles, firmer tanker rates.
 Both falling together means cargo is not moving at all, which is the opposite
 trade. The full argument is in [`docs/CAPE-THESIS.md`](../docs/CAPE-THESIS.md).
 
-It is primary for a reason about the **feed**, not about shipping. AISStream
-leans on satellite reception, which is weakest in crowded coastal straits and
-strongest where hulls are far apart under clear sky. The first three hours of
-collection bore that out — the Cape delivered more messages per hour than any
-other region here, including the Bosphorus, while Hormuz and Bab el-Mandeb
-delivered none at all. A gate is only worth watching in water the feed can
-hear.
+It is primary because the reception is there — but **not for the reason r2
+gave.** That version argued the Cape won because it is open ocean where
+satellite AIS is strong. The volume was real; the explanation was wrong.
+
+`/diagnostics` settled it. Over two hours the Cape's `observedBox` pushed south
+past Cape Point but barely moved east: `-34.79…-33.70°N, 17.66…18.64°E`. That
+is one terrestrial receiver near Cape Town with roughly 60–70 km of reach, not
+satellite coverage of a lane. 132 vessels never came within 50 km of r2's gate
+at 20.0°E.
+
+So r3 moved the gate to 18.15°E, the measured centre of that footprint. What it
+buys is a view of the Cape Peninsula, not of the Southern Ocean — see the
+inshore-bias warning in `chokepoints.js`, which is a seasonal confound the
+denominator does not correct.
 
 Per chokepoint it keeps individual **crossings**, AIS **gaps** (silences),
 hourly **region counters** (messages received, distinct vessels, queue depth)
@@ -72,7 +79,7 @@ reaches production.
 | `DATABASE_URL` | yes | Managed Postgres connection string |
 | `AISSTREAM_API_KEY` | no | Absent, it starts and serves reads but records nothing |
 | `PORT` | no | Default 8080 |
-| `RULES_VERSION` | no | Default `r1`. Bump when detection rules change |
+| `RULES_VERSION` | no | Overrides `CODE_RULES_VERSION`. A mismatch warns at boot and shows on /health |
 | `FLUSH_INTERVAL_MS` | no | Default 30000 |
 | `PGSSL` | no | `disable` for a local Postgres without TLS |
 
@@ -124,7 +131,14 @@ the database, and names which case each chokepoint is in:
 | `HEALTHY` | Both sides populated; crossings should accrue. |
 
 `observedBox` is the corner of the water that actually delivered, as opposed to
-the region subscribed to. The gap between those two boxes is the measurement.
+the region subscribed to. The gap between those two boxes is the measurement —
+it is what exposed the Cape Town receiver, and it is how you tell a satellite
+footprint (scattered, wide) from a terrestrial one (tight, centred on a city).
+
+`nearestFixes` lists the five positions closest to each gate. `nearestGateKm`
+says a gate is unreachable; this says where a reachable one would go. Placing a
+gate without it means placing it from a remembered coastline, which is how r2's
+gate ended up 125 km from the nearest ship.
 
 **Draught, dimensions and ship type are typed in by crews.** They go stale,
 they are wrong sometimes, and a vessel with something to hide can simply lie —

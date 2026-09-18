@@ -37,6 +37,15 @@ const MAX_STATIC = 60_000;
  */
 const NEAR_GATE_KM = 50;
 /**
+ * How many of the closest fixes to each gate /diagnostics reports.
+ *
+ * `nearestGateKm` alone says a gate is unreachable but not where to put one
+ * instead, which leaves the next gate position to be guessed from a coastline
+ * remembered rather than measured. Five positions is enough to see the shape
+ * of a lane and small enough that the response stays readable on a phone.
+ */
+const NEAREST_SAMPLE = 5;
+/**
  * How long the collector must have been ingesting before a queue depth counts.
  * The fix table needs time to refill after a restart, and a sweep over a cold
  * table understates an anchorage in a way nothing downstream could detect.
@@ -385,6 +394,8 @@ export function createIngest(options = {}) {
         nearGate: 0,
         inQueueBox: 0,
         box: null,
+        /** @type {Array<{lat:number, lon:number, km:number, speed:number|null}>} */
+        nearest: [],
       }));
 
       // One walk of the fix table testing every chokepoint per row, rather
@@ -409,6 +420,15 @@ export function createIngest(options = {}) {
               slot.nearestGateKm = km;
             }
             if (km <= NEAR_GATE_KM) slot.nearGate += 1;
+            // A bounded insertion sort over five entries: cheaper than
+            // collecting every fix and sorting at the end, and the ceiling
+            // does not move with the size of the feed.
+            const worst = slot.nearest[slot.nearest.length - 1];
+            if (slot.nearest.length < NEAREST_SAMPLE || km < worst.km) {
+              slot.nearest.push({ lat: fix.lat, lon: fix.lon, km, speed: fix.speed ?? null });
+              slot.nearest.sort((a, b) => a.km - b.km);
+              if (slot.nearest.length > NEAREST_SAMPLE) slot.nearest.pop();
+            }
           }
           if (insideBox(fix.lat, fix.lon, queueBox)) slot.inQueueBox += 1;
         }
@@ -434,6 +454,13 @@ export function createIngest(options = {}) {
             settledLow: side.low,
             settledHigh: side.high,
             inQueueBox: slot.inQueueBox,
+            // Where a gate COULD go, as opposed to where this one is.
+            nearestFixes: slot.nearest.map((n) => ({
+              lat: round(n.lat, 3),
+              lon: round(n.lon, 3),
+              km: round(n.km, 1),
+              speed: n.speed,
+            })),
             observedBox: slot.box
               ? {
                   minLat: round(slot.box.minLat, 2),

@@ -65,6 +65,6 @@ services:
       # Stamped onto every raw row. Bump it whenever a gate moves or a
       # detection threshold changes, so the boundary is visible in the data.
       - key: RULES_VERSION
-        value: r2
+        value: r3
       - key: FLUSH_INTERVAL_MS
         value: "30000"

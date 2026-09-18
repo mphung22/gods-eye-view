@@ -83,10 +83,33 @@ test('north-south gates work the same way', () => {
 
 test('the Cape gate catches rerouting around Africa', () => {
   const detector = createTransitDetector();
-  detector.observe('cape', -36.0, 21.0, NOW);
-  const crossings = detector.observe('cape', -36.0, 19.0, NOW);
+  // Eastbound past Cape Point, then back. The gate sits at 18.15E now, so
+  // these are positions the Cape Town receiver has actually been observed to
+  // reach rather than the open-ocean ones r2 assumed.
+  detector.observe('cape', -34.5, 18.45, NOW);
+  const crossings = detector.observe('cape', -34.5, 17.85, NOW);
   assert.equal(crossings.length, 1);
   assert.equal(crossings[0].chokepoint, 'goodhope');
+  assert.equal(crossings[0].direction, 'inbound');
+});
+
+test('the Cape gate sits inside the coverage that was measured', () => {
+  // The observed footprint after two hours of collection. A gate outside it
+  // cannot produce a crossing however sound the reasoning behind its
+  // placement — which is how r2's gate failed.
+  const OBSERVED = { minLat: -34.79, maxLat: -33.7, minLon: 17.66, maxLon: 18.64 };
+  const { gate } = CHOKEPOINTS.goodhope;
+
+  assert.ok(gate.line > OBSERVED.minLon && gate.line < OBSERVED.maxLon);
+  // And with room either side: a crossing needs vessels settled on both.
+  assert.ok(gate.line - OBSERVED.minLon > 0.3, 'too little reception west of the line');
+  assert.ok(OBSERVED.maxLon - gate.line > 0.3, 'too little reception east of the line');
+  assert.ok(gate.bandMin >= OBSERVED.minLat, 'band reaches south of any reception');
+
+  // The queue box has to be reachable too, for the same reason.
+  const q = CHOKEPOINTS.goodhope.queueBox;
+  assert.ok(q.minLon > OBSERVED.minLon && q.maxLon < OBSERVED.maxLon);
+  assert.ok(q.minLat > OBSERVED.minLat && q.maxLat < OBSERVED.maxLat);
 });
 
 test('the subscription covers every region and nothing else', () => {
@@ -244,7 +267,7 @@ test('distance to a gate measures past the line and outside the band', () => {
   // Longitude degrees are narrower at 41N than at the equator; a gate on a
   // meridian must not over-report distance because of it.
   const capeGate = CHOKEPOINTS.goodhope.gate;
-  const east = distanceToGateKm(capeGate, -36, capeGate.line + 1);
+  const east = distanceToGateKm(capeGate, -34.5, capeGate.line + 1);
   assert.ok(east > 85 && east < 95, `expected ~90 km, got ${east}`);
 });
 
@@ -332,8 +355,8 @@ test('the Cape is the primary series and its gate spans both routings', () => {
   // Westbound ships ride the Agulhas Current close inshore; eastbound stand
   // well south to escape it. Both have to be inside the band or the count
   // measures one direction and calls it a trend.
-  assert.equal(gateSide(gate, -35.2, gate.line + 0.5, BAND), 'high');
-  assert.equal(gateSide(gate, -39.0, gate.line - 0.5, BAND), 'low');
+  assert.equal(gateSide(gate, -34.5, gate.line + 0.4, BAND), 'high');
+  assert.equal(gateSide(gate, -34.7, gate.line - 0.4, BAND), 'low');
   // And the band must stay inside the subscribed region, or the gate watches
   // water the feed was never asked for.
   const { region } = CHOKEPOINTS.goodhope;
@@ -352,8 +375,8 @@ test('Algoa Bay bunkering is counted as a queue', () => {
       NOW,
     );
 
-  stopped('bunker-1', -33.9, 25.9);
-  stopped('bunker-2', -33.95, 26.1);
+  stopped('bunker-1', -33.85, 18.40);
+  stopped('bunker-2', -33.90, 18.45);
   // Nothing is recorded yet: the fix table is still cold, and a sweep now
   // would report an anchorage that had not finished being observed.
   assert.equal(ingest.drain().regionHours.find((r) => r.chokepoint === 'goodhope')
