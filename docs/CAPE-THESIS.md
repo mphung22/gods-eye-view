@@ -197,7 +197,7 @@ mostly stationary harbour traffic rather than lane traffic. It still detects a
 receiver going down, which is its main job. It does not track lane-specific
 reception, and §6 previously implied it did.
 
-### ⚠️ The tanker filter is a Hormuz assumption, carried to the wrong ocean
+### The tanker filter was a Hormuz assumption — measured, then widened
 
 `outbound_laden`, `outbound_ballast` and `outbound_kdwt` are all computed
 `FILTER (WHERE ... AND is_tanker)`. That was right when the gate was at Hormuz,
@@ -210,9 +210,26 @@ certainly a Capesize bulker — is excluded from every tonnage series by that
 filter. The headline counts (`outbound` / `inbound`) do include it.
 
 So the tonnage series is not *corrupted*, it is *narrow*: it measures the
-tanker slice of a reroute that is mostly not tankers. Widening it is a view
-change, which reclassifies all history and needs no backfill — but it should be
-a deliberate decision recorded here, not a silent edit.
+tanker slice of a reroute that is mostly not tankers.
+
+**A full day of crossings then settled how narrow.** Of 52 transits over 21.5
+hours, **7 were tankers — 13%** — and only 4 of those carried a usable
+draught. The series the argument rests on was running on roughly four
+observations a day while 87% of the traffic went unmeasured.
+
+`004_hull_metres.sql` adds a type-agnostic measure beside it. The tanker
+series are untouched, so their history stays comparable; what is new is
+`outbound_hull_m` / `inbound_hull_m`, the summed reported length of every
+hull that crossed, with `outbound_measured` alongside so a fall in metres can
+be told apart from a fall in how many vessels reported a length.
+
+Length rather than tonnage on purpose. Deadweight needs a length-to-tonnage
+curve, that curve differs between tankers, box ships and bulkers, and **AIS
+cannot distinguish a container ship from a bulk carrier at all** — both report
+type 70–79, "cargo". Inventing a curve for hulls whose type is unknowable
+would be a guess dressed as a measurement. Length is one number the hull
+actually reported, it scales with capacity, and a relative index needs nothing
+more.
 
 ## 7. The instruments
 

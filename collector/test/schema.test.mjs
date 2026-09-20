@@ -472,3 +472,46 @@ test('aircraft role and loitering are decided on read', async () => {
   // interesting row in the table rather than one to drop.
   assert.equal(Number(hours.rows[0].loitering_contacts), 3);
 });
+
+test('hull metres measure the whole reroute, not the tanker slice', async () => {
+  const pool = await freshDb();
+  await writeBatch(pool, {
+    crossings: [
+      // The real ratio, from a day of live data: roughly one tanker in seven.
+      crossing({ mmsi: 'tanker', shipType: '80', draughtM: 20.5, lengthM: 333 }),
+      crossing({ mmsi: 'boxship-a', shipType: '70', draughtM: 11.2, lengthM: 400 }),
+      crossing({ mmsi: 'boxship-b', shipType: '74', draughtM: 15.4, lengthM: 399 }),
+      crossing({ mmsi: 'bulker', shipType: '70', draughtM: 18.3, lengthM: 320 }),
+      crossing({ mmsi: 'ferry', shipType: '60', draughtM: 6, lengthM: 150 }),
+      // No length reported: contributes to the count, not to the metres.
+      crossing({ mmsi: 'anonymous', shipType: null, draughtM: null, lengthM: null }),
+    ],
+    regionHours: [
+      { chokepoint: 'hormuz', hour: HOUR, messages: 10, vessels: 6, queueDepth: null, queueSamples: 0 },
+    ],
+    serviceHours: [
+      { hour: HOUR, messages: 10, firstSeen: new Date(HOUR), lastSeen: new Date(HOUR) },
+    ],
+  });
+
+  const { rows } = await pool.query('SELECT * FROM v_chokepoint_hours');
+  const row = rows[0];
+
+  // The tanker series are untouched: they still mean what they always meant,
+  // so their history stays comparable across this change.
+  assert.equal(Number(row.outbound_tanker), 1);
+  assert.equal(Number(row.outbound_kdwt), 300);
+
+  // Hull metres see everything that reported a length — 333+400+399+320+150.
+  assert.equal(Number(row.outbound_hull_m), 1602);
+  // And the count they were summed over, so a fall in metres can be told
+  // apart from a fall in how many hulls reported one.
+  assert.equal(Number(row.outbound_measured), 5);
+  assert.equal(Number(row.outbound), 6);
+
+  // AIS cannot separate container from bulk — both are 'cargo'. The view does
+  // not pretend otherwise.
+  assert.equal(Number(row.cargo), 3);
+  assert.equal(Number(row.passenger), 1);
+  assert.equal(Number(row.unidentified), 1);
+});
