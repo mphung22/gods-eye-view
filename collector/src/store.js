@@ -23,20 +23,60 @@ export async function writeBatch(pool, batch) {
     vesselStatic = [],
     regionHours = [],
     serviceHours = [],
+    airContacts = [],
+    airspaceHours = [],
   } = batch;
   if (
     !crossings.length &&
     !gaps.length &&
     !vesselStatic.length &&
     !regionHours.length &&
-    !serviceHours.length
+    !serviceHours.length &&
+    !airContacts.length &&
+    !airspaceHours.length
   ) {
-    return { crossings: 0, gaps: 0, hours: 0, vesselStatic: 0 };
+    return { crossings: 0, gaps: 0, hours: 0, vesselStatic: 0, airContacts: 0 };
   }
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    for (const row of airContacts) {
+      await client.query(
+        `INSERT INTO air_contacts
+           (airspace, icao24, callsign, observed_at, lat, lon, altitude_m,
+            velocity_ms, vertical_rate_ms, true_track, origin_country, squawk,
+            rules_version)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+        [
+          row.airspace, row.icao24, row.callsign, row.observedAt, row.lat,
+          row.lon, row.altitudeM, row.velocityMs, row.verticalRateMs,
+          row.trueTrack, row.originCountry, row.squawk, row.rulesVersion,
+        ],
+      );
+    }
+
+    for (const row of airspaceHours) {
+      // Additive on the counters, GREATEST on the rosters: a flush carries
+      // what happened since the last one, but distinct aircraft cannot be
+      // summed because the same airframe recurs in every poll.
+      await client.query(
+        `INSERT INTO airspace_hours
+           (airspace, hour, polls_attempted, polls_ok, aircraft, watchworthy, contacts)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)
+         ON CONFLICT (airspace, hour) DO UPDATE SET
+           polls_attempted = airspace_hours.polls_attempted + EXCLUDED.polls_attempted,
+           polls_ok        = airspace_hours.polls_ok + EXCLUDED.polls_ok,
+           aircraft        = GREATEST(airspace_hours.aircraft, EXCLUDED.aircraft),
+           watchworthy     = GREATEST(airspace_hours.watchworthy, EXCLUDED.watchworthy),
+           contacts        = airspace_hours.contacts + EXCLUDED.contacts`,
+        [
+          row.airspace, row.hour, row.pollsAttempted, row.pollsOk,
+          row.aircraft, row.watchworthy, row.contacts,
+        ],
+      );
+    }
 
     for (const row of vesselStatic) {
       // Newest report wins: draught changes between voyages and a vessel can
@@ -139,6 +179,7 @@ export async function writeBatch(pool, batch) {
       gaps: gaps.length,
       hours: regionHours.length,
       vesselStatic: vesselStatic.length,
+      airContacts: airContacts.length,
     };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
@@ -262,6 +303,43 @@ export async function readGaps(pool, query = {}) {
       ORDER BY ended_at DESC
       LIMIT $4`,
     [String(hours), chokepoint ?? null, classification ?? null, limit],
+  );
+  return result.rows;
+}
+
+/**
+ * Hourly airspace counts with their coverage attached.
+ * @param {object} pool Postgres pool.
+ * @param {object} [query]
+ * @returns {Promise<object[]>} Rows, newest first.
+ */
+export async function readAirspaceHours(pool, query = {}) {
+  const { airspace, hours = 168 } = query;
+  const result = await pool.query(
+    `SELECT * FROM v_airspace_hours
+      WHERE hour >= date_trunc('hour', now()) - ($1 || ' hours')::INTERVAL
+        AND ($2::TEXT IS NULL OR airspace = $2)
+      ORDER BY hour DESC, airspace`,
+    [String(hours), airspace ?? null],
+  );
+  return result.rows;
+}
+
+/**
+ * Individual military-suspected contacts, interpreted on read.
+ * @param {object} pool Postgres pool.
+ * @param {object} [query]
+ * @returns {Promise<object[]>} Rows, newest first.
+ */
+export async function readAirContacts(pool, query = {}) {
+  const { airspace, hours = 24, limit = 200 } = query;
+  const result = await pool.query(
+    `SELECT * FROM v_air_contacts
+      WHERE observed_at >= now() - ($1 || ' hours')::INTERVAL
+        AND ($2::TEXT IS NULL OR airspace = $2)
+      ORDER BY observed_at DESC
+      LIMIT $3`,
+    [String(hours), airspace ?? null, limit],
   );
   return result.rows;
 }

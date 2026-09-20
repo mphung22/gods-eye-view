@@ -15,6 +15,9 @@ import { createFeedActivity, evaluateGap, haversineKm } from '../src/domain/gaps
 import { createIngest, lengthFromDimension, parseEnvelope } from '../src/ingest.js';
 import { CODE_RULES_VERSION, loadConfig } from '../src/config.js';
 import { __testing as apiTesting } from '../src/api.js';
+import { AIRSPACES, isWatchworthy, openSkyQuery } from '../src/domain/airspaces.js';
+import { createAirwatch } from '../src/airwatch.js';
+import { parseState } from '../src/opensky.js';
 
 const MINUTE = 60_000;
 const NOW = Date.UTC(2026, 8, 16, 12, 0, 0);
@@ -448,4 +451,116 @@ test('an absent query parameter falls through to its default', () => {
   assert.equal(intParam(new URLSearchParams('limit=7.9'), 'limit', 1, 5000, 500), 7);
   // And an explicit zero is a real request to clamp, unlike an absent one.
   assert.equal(intParam(new URLSearchParams('hours=0'), 'hours', 24, 17520, 2160), 24);
+});
+
+test('the watchworthy net is wide, and blank callsigns do not qualify', () => {
+  // US military hex block — the one that matters, because US tankers are what
+  // surge before a strike package flies.
+  assert.equal(isWatchworthy('ae1234', null), true);
+  assert.equal(isWatchworthy('AE1234', ''), true, 'hex is case-insensitive');
+  // A civil airliner with no interesting callsign is dropped.
+  assert.equal(isWatchworthy('4ca7b1', 'RYR1234'), false);
+  // Callsign alone is enough, because many military aircraft broadcast civil
+  // addresses. The net is deliberately wide: a false positive costs one row,
+  // a false negative costs a contact the sky will never repeat.
+  assert.equal(isWatchworthy('c01234', 'RCH512'), true);
+  assert.equal(isWatchworthy('c01234', 'FORTE11'), true);
+  // Blank identity is not a match on the callsign path.
+  assert.equal(isWatchworthy('c01234', '   '), false);
+  assert.equal(isWatchworthy('', null), false);
+  assert.equal(isWatchworthy('zzzzzz', null), false, 'unparseable hex');
+});
+
+test('every airspace box is a usable OpenSky query', () => {
+  for (const airspace of Object.values(AIRSPACES)) {
+    const { minLat, maxLat, minLon, maxLon } = airspace.box;
+    assert.ok(maxLat > minLat && maxLon > minLon, airspace.id);
+    assert.ok(minLat >= -90 && maxLat <= 90, airspace.id);
+    const q = openSkyQuery(airspace);
+    assert.match(q, /lamin=.*&lomin=.*&lamax=.*&lomax=/);
+    assert.ok(q.includes(`lamin=${minLat}`));
+  }
+});
+
+test('a failed poll is recorded as a failure, not as an empty sky', () => {
+  const air = createAirwatch({ rulesVersion: 'test' });
+  const levant = AIRSPACES.levant;
+
+  // A rate-limited poll returns zero aircraft, exactly like a quiet sky.
+  air.record(levant, { ok: false, contacts: [], reason: 'rate-limited' }, NOW);
+  let row = air.drain().airspaceHours.find((r) => r.airspace === 'levant');
+  assert.equal(row.pollsAttempted, 1);
+  assert.equal(row.pollsOk, 0, 'a failure must not count as a look');
+  assert.equal(row.aircraft, 0);
+
+  // A successful poll that genuinely saw nothing is a different fact.
+  air.record(levant, { ok: true, contacts: [], reason: null }, NOW);
+  row = air.drain().airspaceHours.find((r) => r.airspace === 'levant');
+  assert.equal(row.pollsAttempted, 1);
+  assert.equal(row.pollsOk, 1);
+  assert.equal(row.aircraft, 0);
+
+  // And the verdict says which is which in words, not just numbers.
+  air.record(levant, { ok: false, contacts: [], reason: 'http-503' }, NOW);
+  const verdict = air.diagnostics(NOW).find((a) => a.id === 'levant').verdict;
+  assert.match(verdict, /^POLL FAILED/);
+});
+
+test('airwatch keeps rows only for watchworthy airborne contacts', () => {
+  const air = createAirwatch({ rulesVersion: 'test' });
+  const contact = (over) => ({
+    icao24: 'ae0001', callsign: 'ESSO51', lat: 33.5, lon: 34.5,
+    altitudeM: 9000, velocityMs: 140, verticalRateMs: 0, trueTrack: 90,
+    originCountry: 'United States', squawk: '1200', onGround: false,
+    observedAt: Math.floor(NOW / 1000), ...over,
+  });
+
+  air.record(AIRSPACES.levant, {
+    ok: true,
+    contacts: [
+      contact(),
+      // Same tanker, on the ground. An airframe parked on an apron is not a
+      // signal, and that is where most of them are most of the time.
+      contact({ icao24: 'ae0002', onGround: true }),
+      // A civil airliner: counted in the denominator, no row of its own.
+      contact({ icao24: '4ca7b1', callsign: 'RYR1234' }),
+      // Watchworthy but with no position to record.
+      contact({ icao24: 'ae0003', lat: null, lon: null }),
+    ],
+  }, NOW);
+
+  const batch = air.drain();
+  assert.equal(batch.airContacts.length, 1);
+  assert.equal(batch.airContacts[0].icao24, 'ae0001');
+  assert.equal(batch.airContacts[0].rulesVersion, 'test');
+
+  const row = batch.airspaceHours.find((r) => r.airspace === 'levant');
+  // All four count toward "how much was in the sky" — that is the
+  // denominator, and dropping the airliner from it would make the watchworthy
+  // share meaningless.
+  assert.equal(row.aircraft, 4);
+  assert.equal(row.watchworthy, 3);
+  assert.equal(row.contacts, 1);
+});
+
+test('OpenSky state vectors parse by name, not by position', () => {
+  // The API returns bare arrays. One shifted index silently swaps latitude
+  // and longitude, which would put every contact in the wrong hemisphere.
+  const parsed = parseState([
+    'ae1234', 'ESSO51  ', 'United States', 1789000000, 1789000005,
+    34.5, 33.5, 9000, false, 140, 90, 0, null, null, '1200',
+  ]);
+  assert.equal(parsed.icao24, 'ae1234');
+  assert.equal(parsed.callsign, 'ESSO51');
+  assert.equal(parsed.lon, 34.5);
+  assert.equal(parsed.lat, 33.5);
+  assert.equal(parsed.altitudeM, 9000);
+  assert.equal(parsed.velocityMs, 140);
+  assert.equal(parsed.onGround, false);
+  assert.equal(parsed.squawk, '1200');
+
+  assert.equal(parseState(null), null);
+  assert.equal(parseState(['']), null);
+  // A null position is null, not zero — 0,0 is a real place in the Atlantic.
+  assert.equal(parseState(['ae1', '', '', null, null, null, null])?.lat, null);
 });

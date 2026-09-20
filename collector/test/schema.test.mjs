@@ -360,3 +360,115 @@ test('the hourly view counts what it could not identify', async () => {
   // in how many hulls happened to have sent a static report.
   assert.equal(Number(rows[0].unidentified), 2);
 });
+
+test('an airspace hour is unobserved until a poll succeeds', async () => {
+  const pool = await freshDb();
+
+  // Three attempts, none of which worked. Zero aircraft is the only thing the
+  // contact rows would show, and it reads exactly like peacetime.
+  await writeBatch(pool, {
+    airspaceHours: [
+      {
+        airspace: 'levant',
+        hour: HOUR,
+        pollsAttempted: 3,
+        pollsOk: 0,
+        aircraft: 0,
+        watchworthy: 0,
+        contacts: 0,
+      },
+    ],
+  });
+
+  let { rows } = await pool.query('SELECT * FROM v_airspace_hours');
+  assert.equal(rows[0].polls_attempted, 3);
+  assert.equal(rows[0].observed, false, 'no successful poll is not an empty sky');
+
+  // One success later in the same hour flips it, and the attempts accumulate.
+  await writeBatch(pool, {
+    airspaceHours: [
+      {
+        airspace: 'levant',
+        hour: HOUR,
+        pollsAttempted: 1,
+        pollsOk: 1,
+        aircraft: 180,
+        watchworthy: 4,
+        contacts: 6,
+      },
+    ],
+  });
+
+  ({ rows } = await pool.query('SELECT * FROM v_airspace_hours'));
+  assert.equal(rows[0].polls_attempted, 4);
+  assert.equal(rows[0].polls_ok, 1);
+  assert.equal(rows[0].observed, true);
+  // Distinct aircraft cannot be summed — the same airframes recur every poll.
+  assert.equal(rows[0].aircraft, 180);
+  assert.equal(Number(rows[0].contacts), 6);
+});
+
+test('aircraft role and loitering are decided on read', async () => {
+  const pool = await freshDb();
+  const contact = (over = {}) => ({
+    airspace: 'levant',
+    icao24: 'ae0001',
+    callsign: 'ESSO51',
+    observedAt: new Date(HOUR),
+    lat: 33.5,
+    lon: 34.5,
+    altitudeM: 9000,
+    velocityMs: 140,
+    verticalRateMs: 0,
+    trueTrack: 90,
+    originCountry: 'United States',
+    squawk: '1200',
+    rulesVersion: 'r1',
+    ...over,
+  });
+
+  await writeBatch(pool, {
+    airContacts: [
+      contact({ icao24: 'tanker-orbit' }),
+      // Same callsign family, but transiting: high and fast, not holding.
+      contact({ icao24: 'tanker-transit', velocityMs: 240 }),
+      contact({ icao24: 'isr', callsign: 'FORTE11', altitudeM: 17000, velocityMs: 100 }),
+      contact({ icao24: 'lift', callsign: 'RCH512', velocityMs: 230 }),
+      contact({ icao24: 'mystery', callsign: null }),
+    ],
+    airspaceHours: [
+      {
+        airspace: 'levant',
+        hour: HOUR,
+        pollsAttempted: 1,
+        pollsOk: 1,
+        aircraft: 200,
+        watchworthy: 5,
+        contacts: 5,
+      },
+    ],
+  });
+
+  const { rows } = await pool.query(
+    'SELECT icao24, role, loitering FROM v_air_contacts ORDER BY icao24',
+  );
+  const by = Object.fromEntries(rows.map((r) => [r.icao24, r]));
+  assert.equal(by['tanker-orbit'].role, 'tanker');
+  assert.equal(by['tanker-orbit'].loitering, true);
+  // Speed is what separates a tanker holding station from one passing through.
+  assert.equal(by['tanker-transit'].loitering, false);
+  assert.equal(by.isr.role, 'isr');
+  assert.equal(by.lift.role, 'airlift');
+  // No callsign is not a guess — it is unclassified.
+  assert.equal(by.mystery.role, 'unclassified');
+
+  const hours = await pool.query(
+    'SELECT tanker_contacts, isr_contacts, loitering_contacts FROM v_airspace_hours',
+  );
+  assert.equal(Number(hours.rows[0].tanker_contacts), 2);
+  assert.equal(Number(hours.rows[0].isr_contacts), 1);
+  // Three, not two: the unclassified contact inherits the orbit profile, and
+  // an airframe nobody can name holding a racetrack is arguably the most
+  // interesting row in the table rather than one to drop.
+  assert.equal(Number(hours.rows[0].loitering_contacts), 3);
+});

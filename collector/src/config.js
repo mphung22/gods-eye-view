@@ -39,6 +39,19 @@ export function loadConfig(env = process.env) {
         ? CODE_RULES_VERSION
         : null,
     flushIntervalMs: Number(env.FLUSH_INTERVAL_MS) || 30_000,
+    // Airwatch. Absent credentials mean the air side simply never polls —
+    // the ship collector keeps running, which is the point of keeping the
+    // two failure domains separate.
+    openSkyClientId: env.OPENSKY_CLIENT_ID || '',
+    openSkyClientSecret: env.OPENSKY_CLIENT_SECRET || '',
+    /**
+     * Ten minutes across three boxes is ~432 polls a day. OpenSky's
+     * authenticated budget is roughly 4000 credits and a bounded box costs
+     * far less than the global feed, so this sits well inside it — the globe
+     * app's provider carries a note about unbounded polling exhausting the
+     * whole day's budget in eight hours.
+     */
+    airPollIntervalMs: Number(env.AIR_POLL_INTERVAL_MS) || 600_000,
     ssl: env.PGSSL === 'disable' ? false : { rejectUnauthorized: false },
   };
 }

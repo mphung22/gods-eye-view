@@ -82,6 +82,9 @@ reaches production.
 | `RULES_VERSION` | no | Overrides `CODE_RULES_VERSION`. A mismatch warns at boot and shows on /health |
 | `FLUSH_INTERVAL_MS` | no | Default 30000 |
 | `PGSSL` | no | `disable` for a local Postgres without TLS |
+| `OPENSKY_CLIENT_ID` | no | Airwatch OAuth. Absent, the air side records nothing |
+| `OPENSKY_CLIENT_SECRET` | no | Pair with the above |
+| `AIR_POLL_INTERVAL_MS` | no | Default 600000 (10 min). ~432 polls/day across 3 boxes |
 
 ### Deploying on Render
 
@@ -104,7 +107,55 @@ GET /hours?chokepoint=&hours=    hourly counts + denominator + coverage
 GET /days?chokepoint=&hours=     daily rollup
 GET /crossings?chokepoint=&hours=&limit=   raw rows, interpreted on read
 GET /gaps?chokepoint=&class=&hours=        dark / spoofed silences
+GET /air?airspace=&hours=&limit=           military air activity + poll coverage
 ```
+
+## Airwatch (added September 2026)
+
+The ship side measures **consequences** — where cargo went after something
+happened. Airwatch is the only part of this that looks **forward**, and only a
+little.
+
+Refuelling aircraft have to launch before a strike package can fly any
+distance, and they broadcast position like anything else. An unusual tanker
+presence is therefore one of the few genuinely leading signals available from
+public data.
+
+| Airspace | Box | Why |
+| --- | --- | --- |
+| `levant` | 30.5–37.0°N, 31.0–37.0°E | Israel theatre; tanker and ISR orbits sit offshore |
+| `gulf` | 22.5–31.0°N, 48.0–60.0°E | Carrier air, Gulf basing, Hormuz approaches |
+| `iranborder` | 30.0–38.0°N, 40.0–50.0°E | Ingress corridor and border-tracing ISR |
+
+⚠️ **Every box is a guess.** The Cape gate was placed by reasoning and sat
+125 km outside anything the feed could hear. These have not been measured
+either — read `/diagnostics` before trusting any count from them.
+
+**The rule that makes a zero readable:** `polls_attempted` and `polls_ok`
+travel with every hour. Three attempts and no successes means the hour is
+**unobserved**, which reads identically to peacetime in the contact rows
+alone. `observed` is false for such an hour and every count in it should be
+discarded rather than plotted.
+
+Two levels of detail, as on the ship side. Every aircraft counts toward the
+hourly denominator; only *watchworthy* contacts get individual rows, because
+storing every airliner over the Gulf would be millions of rows a year to no
+purpose. The keep-or-drop test is deliberately wide and crude: narrowing it
+later is a view change, widening it later cannot recover contacts that were
+never written down.
+
+`role` (tanker / isr / airlift) and `loitering` are decided **on read** and are
+heuristics over a callsign a crew typed in. They will be wrong. That is why
+they live in a view.
+
+**What this does NOT do:** predict attacks. Tanker surges precede routine
+exercises far more often than operations, the warning is hours rather than
+days, and options are already expensive when tension is visible. Log every
+signal *before* the outcome for a month before believing any of it.
+
+Credentials are optional. Without `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`
+the air side records nothing and the ship collector is unaffected — the two
+failure domains are kept separate on purpose.
 
 ## Backups
 

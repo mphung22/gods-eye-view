@@ -4,7 +4,10 @@ import {
   PRIMARY_CHOKEPOINT,
   chokepointById,
 } from './domain/chokepoints.js';
+import { AIRSPACE_IDS } from './domain/airspaces.js';
 import {
+  readAirContacts,
+  readAirspaceHours,
   readCoverage,
   readCrossings,
   readDays,
@@ -67,7 +70,7 @@ export const __testing = { intParam };
  * @param {object} deps.config Loaded config.
  * @returns {import('node:http').Server} Unstarted server.
  */
-export function createApi({ pool, ingest, stream, config }) {
+export function createApi({ pool, ingest, stream, config, airwatch, openSky }) {
   return createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://localhost');
     const params = url.searchParams;
@@ -92,6 +95,7 @@ export function createApi({ pool, ingest, stream, config }) {
           rulesVersionShouldBe: config.rulesVersionOverridden,
           stream: stream?.status?.() ?? null,
           ingest: ingest?.stats?.() ?? null,
+          airwatch: airwatch?.stats?.() ?? null,
           uptimeSec: Math.round(process.uptime()),
           memoryMb: Math.round(process.memoryUsage().rss / 1024 / 1024),
         });
@@ -107,6 +111,8 @@ export function createApi({ pool, ingest, stream, config }) {
           primary: PRIMARY_CHOKEPOINT,
           stream: stream?.status?.() ?? null,
           ...(ingest?.diagnostics?.() ?? {}),
+          openSky: openSky?.status?.() ?? null,
+          airspaces: airwatch?.diagnostics?.() ?? [],
         });
         return;
       }
@@ -144,6 +150,28 @@ export function createApi({ pool, ingest, stream, config }) {
         return;
       }
 
+      if (url.pathname === '/air') {
+        const airspace = params.get('airspace') || null;
+        if (airspace && !AIRSPACE_IDS.includes(airspace)) {
+          send(res, 400, {
+            error: `unknown airspace; known: ${AIRSPACE_IDS.join(', ')}`,
+          });
+          return;
+        }
+        const hours = intParam(params, 'hours', 1, 24 * 365 * 2, 168);
+        send(res, 200, {
+          rows: await readAirspaceHours(pool, { airspace, hours }),
+          contacts: await readAirContacts(pool, {
+            airspace,
+            hours: intParam(params, 'contactHours', 1, 24 * 90, 24),
+            limit: intParam(params, 'limit', 1, 2000, 200),
+          }),
+          airspaces: AIRSPACE_IDS,
+          note: 'polls_attempted vs polls_ok is the denominator — an hour with polls_ok 0 is unobserved, not quiet. role and loitering are heuristics over a crew-typed callsign.',
+        });
+        return;
+      }
+
       if (url.pathname === '/gaps') {
         const classification = params.get('class');
         if (classification && !['dark', 'spoofed'].includes(classification)) {
@@ -163,7 +191,9 @@ export function createApi({ pool, ingest, stream, config }) {
 
       send(res, 404, {
         error: 'not found',
-        routes: ['/health', '/diagnostics', '/hours', '/days', '/crossings', '/gaps'],
+        routes: [
+          '/health', '/diagnostics', '/hours', '/days', '/crossings', '/gaps', '/air',
+        ],
       });
     } catch (error) {
       console.error('[api]', error?.message || error);
