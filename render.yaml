@@ -68,7 +68,7 @@ services:
         value: r3
       - key: FLUSH_INTERVAL_MS
         value: "30000"
-          - type: web
+  - type: web
     name: sgn-arrivals
     runtime: node
     plan: starter
