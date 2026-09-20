@@ -12,8 +12,43 @@
 
 import { openSkyQuery } from './domain/airspaces.js';
 
-const TOKEN_URL =
-  'https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token';
+/**
+ * Token endpoints, tried in order.
+ *
+ * Keycloak 17 dropped the `/auth` path prefix, and deployments migrated at
+ * different times. The globe app uses the older form and works, so it is
+ * tried first — but if OpenSky has since moved, the old host or path fails at
+ * the network layer and the newer form is the fix. Trying both costs one extra
+ * request on the first boot after a migration and nothing afterwards, which is
+ * cheaper than a round trip to a human to find out which is live.
+ */
+const TOKEN_URLS = [
+  'https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token',
+  'https://auth.opensky-network.org/realms/opensky-network/protocol/openid-connect/token',
+];
+
+/**
+ * Unwrap what `fetch failed` is actually hiding.
+ *
+ * Node's fetch reports every network-layer problem — DNS, refused connection,
+ * expired certificate, timeout — as the same three useless words, and puts the
+ * real reason in `error.cause`. Reporting only the message turns four distinct
+ * faults with four distinct fixes into one indistinguishable blob, which is
+ * precisely the failure this whole collector exists to avoid.
+ *
+ * @param {unknown} error Caught value.
+ * @returns {string} Something a person can act on.
+ */
+export function describeFetchError(error) {
+  const message = error?.message || String(error);
+  const cause = error?.cause;
+  if (!cause) return message;
+  const code = cause.code || cause.errno || '';
+  const detail = cause.message || '';
+  const parts = [message, code, detail].filter(Boolean);
+  // Deduplicate: undici often repeats the message inside the cause.
+  return [...new Set(parts)].join(': ');
+}
 const STATES_URL = 'https://opensky-network.org/api/states/all';
 /** Refresh the token this long before it actually expires. */
 const TOKEN_SKEW_MS = 60_000;
@@ -82,6 +117,8 @@ export function createOpenSky(config, deps = {}) {
   const fetchImpl = deps.fetchImpl || globalThis.fetch;
   let token = null;
   let tokenExpiresAt = 0;
+  /** The token URL that last worked, so it is tried first next time. */
+  let tokenUrl = null;
   /** Epoch ms before which no request is attempted, after a 429. */
   let cooldownUntil = 0;
   let creditsRemaining = null;
@@ -97,16 +134,39 @@ export function createOpenSky(config, deps = {}) {
       client_id: config.openSkyClientId,
       client_secret: config.openSkyClientSecret,
     });
-    const res = await fetchImpl(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    });
-    if (!res.ok) throw new Error(`token ${res.status}`);
-    const json = await res.json();
-    token = json.access_token;
-    tokenExpiresAt = nowMs + (Number(json.expires_in) || 1800) * 1000;
-    return token;
+
+    const failures = [];
+    // A URL that worked before is tried first on every refresh, so the
+    // fallback costs nothing once one of them has answered.
+    const urls = tokenUrl ? [tokenUrl, ...TOKEN_URLS.filter((u) => u !== tokenUrl)] : TOKEN_URLS;
+    for (const url of urls) {
+      try {
+        const res = await fetchImpl(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString(),
+        });
+        if (!res.ok) {
+          // 401/403 is a credential problem and no other URL will fix it, so
+          // it stops here rather than being retried and reported as the
+          // second URL's fault.
+          if (res.status === 401 || res.status === 403) {
+            throw new Error(`token rejected: HTTP ${res.status} — check the client id and secret`);
+          }
+          failures.push(`${url} -> HTTP ${res.status}`);
+          continue;
+        }
+        const json = await res.json();
+        token = json.access_token;
+        tokenExpiresAt = nowMs + (Number(json.expires_in) || 1800) * 1000;
+        tokenUrl = url;
+        return token;
+      } catch (error) {
+        if (String(error?.message || '').startsWith('token rejected')) throw error;
+        failures.push(`${url} -> ${describeFetchError(error)}`);
+      }
+    }
+    throw new Error(`no token endpoint answered — ${failures.join(' | ')}`);
   }
 
   return {
@@ -168,8 +228,13 @@ export function createOpenSky(config, deps = {}) {
         // That is why ok is true here even when nothing came back.
         return { ok: true, contacts, reason: null };
       } catch (error) {
-        lastError = error?.message || String(error);
-        return { ok: false, contacts: [], reason: 'error' };
+        // `fetch failed` on its own names four different faults with four
+        // different fixes. Unwrap it, and say which half of the exchange
+        // broke, because "auth is unreachable" and "the data host is
+        // unreachable" are not the same problem.
+        lastError = describeFetchError(error);
+        const reason = /token/i.test(lastError) ? 'auth-error' : 'fetch-error';
+        return { ok: false, contacts: [], reason };
       }
     },
 
@@ -179,6 +244,7 @@ export function createOpenSky(config, deps = {}) {
         configured: Boolean(config.openSkyClientId && config.openSkyClientSecret),
         creditsRemaining,
         coolingDownForMs: Math.max(0, cooldownUntil - nowMs),
+        tokenUrl,
         lastOkAt: lastOkAt ? new Date(lastOkAt).toISOString() : null,
         lastError,
       };

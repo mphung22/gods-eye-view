@@ -17,7 +17,7 @@ import { CODE_RULES_VERSION, loadConfig } from '../src/config.js';
 import { __testing as apiTesting } from '../src/api.js';
 import { AIRSPACES, isWatchworthy, openSkyQuery } from '../src/domain/airspaces.js';
 import { createAirwatch } from '../src/airwatch.js';
-import { parseState } from '../src/opensky.js';
+import { createOpenSky, describeFetchError, parseState } from '../src/opensky.js';
 
 const MINUTE = 60_000;
 const NOW = Date.UTC(2026, 8, 16, 12, 0, 0);
@@ -563,4 +563,78 @@ test('OpenSky state vectors parse by name, not by position', () => {
   assert.equal(parseState(['']), null);
   // A null position is null, not zero — 0,0 is a real place in the Atlantic.
   assert.equal(parseState(['ae1', '', '', null, null, null, null])?.lat, null);
+});
+
+test('a fetch failure says what actually failed', () => {
+  // Node reports DNS, refused connections, bad certificates and timeouts as
+  // the same three words and hides the reason in `cause`. Four faults, four
+  // different fixes, one indistinguishable message.
+  const dns = Object.assign(new Error('fetch failed'), {
+    cause: Object.assign(new Error('getaddrinfo ENOTFOUND auth.example.org'), {
+      code: 'ENOTFOUND',
+    }),
+  });
+  const described = describeFetchError(dns);
+  assert.match(described, /ENOTFOUND/);
+  assert.match(described, /auth\.example\.org/);
+
+  const refused = Object.assign(new Error('fetch failed'), {
+    cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+  });
+  assert.match(describeFetchError(refused), /ECONNREFUSED/);
+
+  // No cause to unwrap: the message stands on its own, not "undefined".
+  assert.equal(describeFetchError(new Error('token rejected: HTTP 401')),
+    'token rejected: HTTP 401');
+  assert.equal(describeFetchError('plain string'), 'plain string');
+
+  // undici repeats itself; the reader should not have to.
+  const repeated = Object.assign(new Error('fetch failed'), {
+    cause: Object.assign(new Error('fetch failed'), { code: 'fetch failed' }),
+  });
+  assert.equal(describeFetchError(repeated), 'fetch failed');
+});
+
+test('the token falls back to the other Keycloak path, but not past a 401', async () => {
+  const tried = [];
+  const config = { openSkyClientId: 'id', openSkyClientSecret: 'secret' };
+
+  // First URL dies at the network layer; the second answers. Keycloak 17
+  // dropped the /auth prefix and deployments migrated at different times.
+  const sky = createOpenSky(config, {
+    fetchImpl: async (url) => {
+      tried.push(url);
+      if (url.includes('/auth/realms')) {
+        throw Object.assign(new Error('fetch failed'), {
+          cause: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }),
+        });
+      }
+      if (url.includes('/realms')) {
+        return { ok: true, status: 200, headers: { get: () => null },
+          json: async () => ({ access_token: 't', expires_in: 1800 }) };
+      }
+      return { ok: true, status: 200, headers: { get: () => null },
+        json: async () => ({ states: [] }) };
+    },
+  });
+
+  const result = await sky.poll(AIRSPACES.levant, NOW);
+  assert.equal(result.ok, true);
+  assert.equal(tried.filter((u) => u.includes('realms')).length, 2, 'both forms tried');
+  assert.equal(sky.status().tokenUrl.includes('/auth/realms'), false, 'remembers the one that worked');
+
+  // A rejected credential is not a wrong-URL problem, so it must not be
+  // retried and blamed on the second endpoint.
+  const attempts = [];
+  const bad = createOpenSky(config, {
+    fetchImpl: async (url) => {
+      attempts.push(url);
+      return { ok: false, status: 401, headers: { get: () => null } };
+    },
+  });
+  const rejected = await bad.poll(AIRSPACES.levant, NOW);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'auth-error');
+  assert.equal(attempts.length, 1, 'a 401 stops immediately');
+  assert.match(bad.status().lastError, /check the client id and secret/);
 });
