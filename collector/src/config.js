@@ -45,11 +45,21 @@ export function loadConfig(env = process.env) {
     openSkyClientId: env.OPENSKY_CLIENT_ID || '',
     openSkyClientSecret: env.OPENSKY_CLIENT_SECRET || '',
     /**
-     * Ten minutes across three boxes is ~432 polls a day. OpenSky's
-     * authenticated budget is roughly 4000 credits and a bounded box costs
-     * far less than the global feed, so this sits well inside it — the globe
-     * app's provider carries a note about unbounded polling exhausting the
-     * whole day's budget in eight hours.
+     * Ten minutes across three boxes is 144 rounds a day.
+     *
+     * Rounds are not credits. OpenSky charges by AREA, not per call, so the
+     * three boxes cost different amounts and a round costs the sum of them —
+     * an estimated ~7 credits, or roughly 1000 a day against a Standard
+     * allowance of 4000. Comfortable, but a quarter of the budget rather than
+     * the tenth "432 polls" implied before this was actually computed.
+     *
+     * ⚠️ That allowance is per ACCOUNT. The globe app polls OpenSky too, and
+     * its provider carries a note about unbounded global polling exhausting a
+     * whole day's budget in eight hours. Sharing one account between the two
+     * means they eat the same 4000.
+     *
+     * Do not trust the estimate: /diagnostics reports the live
+     * X-Rate-Limit-Remaining header, which is the real number.
      */
     airPollIntervalMs: Number(env.AIR_POLL_INTERVAL_MS) || 600_000,
     ssl: env.PGSSL === 'disable' ? false : { rejectUnauthorized: false },

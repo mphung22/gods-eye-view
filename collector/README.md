@@ -84,7 +84,7 @@ reaches production.
 | `PGSSL` | no | `disable` for a local Postgres without TLS |
 | `OPENSKY_CLIENT_ID` | no | Airwatch OAuth. Absent, the air side records nothing |
 | `OPENSKY_CLIENT_SECRET` | no | Pair with the above |
-| `AIR_POLL_INTERVAL_MS` | no | Default 600000 (10 min). ~432 polls/day across 3 boxes |
+| `AIR_POLL_INTERVAL_MS` | no | Default 600000 (10 min) = 144 rounds/day, est. ~1000 credits |
 
 ### Deploying on Render
 
@@ -152,6 +152,31 @@ they live in a view.
 exercises far more often than operations, the warning is hours rather than
 days, and options are already expensive when tension is visible. Log every
 signal *before* the outcome for a month before believing any of it.
+
+### Credits
+
+OpenSky charges by **area, not per call**, so the three boxes cost different
+amounts and one round costs the sum:
+
+| Box | Size | Est. cost |
+| --- | --- | --- |
+| `levant` | 39 sq° | 2 credits |
+| `gulf` | 102 sq° | 3 credits — just over a band boundary |
+| `iranborder` | 80 sq° | 2 credits |
+
+Roughly **7 credits a round, ~1000 a day** at the default ten-minute interval,
+against a Standard allowance of **4000/day**. Comfortable at about a quarter of
+the budget.
+
+⚠️ **The allowance is per account, and the globe app polls OpenSky too.** Its
+provider carries a note about unbounded global polling exhausting a whole day's
+budget in eight hours. Sharing one account between the globe and the collector
+means they compete for the same 4000 — give them separate accounts if the globe
+is running.
+
+Do not trust the estimate above. `/diagnostics` reports the live
+`X-Rate-Limit-Remaining` header under `openSky.creditsRemaining`, which is the
+real number and the only one worth acting on.
 
 Credentials are optional. Without `OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`
 the air side records nothing and the ship collector is unaffected — the two
