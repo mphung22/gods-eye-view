@@ -68,3 +68,26 @@ services:
         value: r3
       - key: FLUSH_INTERVAL_MS
         value: "30000"
+          - type: web
+    name: sgn-arrivals
+    runtime: node
+    plan: starter
+    rootDir: sgn-arrivals
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - sgn-arrivals/**
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: chokepoint-db
+          property: connectionString
+      - key: OPENSKY_CLIENT_ID
+        sync: false
+      - key: OPENSKY_CLIENT_SECRET
+        sync: false
+      - key: RULES_VERSION
+        value: r1
+
