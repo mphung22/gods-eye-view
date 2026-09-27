@@ -6,8 +6,30 @@ Written September 2026, at rules version `r3`. This document is the argument
 the data is being gathered to test, written down in advance so that it can be
 shown wrong rather than quietly revised afterwards.
 
-**Status: the pipeline is validated and the rate is usable. The signal is
-still unproven.**
+**Status: there is a baseline.**
+
+Seven days of r3 collection, 20–27 September 2026, 374 crossings.
+
+```
+20 Sep   24  (partial)      24 Sep   56
+21 Sep   59                 25 Sep   60
+22 Sep   55                 26 Sep   54
+23 Sep   42                 27 Sep   24  (partial)
+```
+
+**Six full days: mean 54.3 per day, sd 5.9.** So a day has to fall below 42 or
+rise above 66 before it is outside two standard deviations — a swing of about
+22% either way. That threshold is the first genuinely useful output of this
+project, because until now there was no way to say whether any number was
+unusual.
+
+Direction came out **186 outbound to 188 inbound** — as even as a through-route
+should be. The 32/20 inbound skew visible in the first day was noise, and
+saying so at the time rather than reading a reroute into it was the right call.
+
+Six days is a thin baseline. It has no weekly pattern in it, no seasonal
+weather, no month-end shipping cycle. Treat ±12 as provisional and expect it to
+widen.
 
 The r3 gate produced five crossings between 10:09 and 13:06 UTC on 18
 September 2026 — **1.7 per hour, about 41 per day.** That is enough events to
@@ -212,9 +234,9 @@ filter. The headline counts (`outbound` / `inbound`) do include it.
 So the tonnage series is not *corrupted*, it is *narrow*: it measures the
 tanker slice of a reroute that is mostly not tankers.
 
-**A full day of crossings then settled how narrow.** Of 52 transits over 21.5
-hours, **7 were tankers — 13%** — and only 4 of those carried a usable
-draught. The series the argument rests on was running on roughly four
+**A full week then settled how narrow.** Of 374 transits, **30 were tankers —
+8%**, and only 26 carried a usable draught. The one-day sample suggested 13%;
+a week says it is thinner than that. The series the argument rests on was running on roughly four
 observations a day while 87% of the traffic went unmeasured.
 
 `004_hull_metres.sql` adds a type-agnostic measure beside it. The tanker
