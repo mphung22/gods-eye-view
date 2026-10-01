@@ -55,6 +55,27 @@ export const CHOKEPOINTS = Object.freeze({
     // Almost everything leaving the Black Sea crosses this line: Russian and
     // Kazakh crude, Ukrainian grain.
     watch: 'outbound',
+    // ⚠️ THE COUNT HERE IS NOT A TRAFFIC SERIES, and fourteen days settled it.
+    //
+    // The strait really carries about 110 transits a day. We recorded 47 in a
+    // fortnight — 3.4 a day, 3% of the truth. That alone would only mean a
+    // thin sample. What rules it out as a series is WHAT it moves with: daily
+    // crossings correlate +0.93 with how many vessels were received and +0.63
+    // with message volume, while the Cape's count over the same days
+    // correlates +0.18 and +0.11. One day, 2026-09-21, reception roughly
+    // doubled across the whole feed and this gate returned 24 crossings
+    // against a fortnight median of 1.5. Nothing sailed differently.
+    //
+    // The cause is reception, not geometry: the region is the whole Black Sea
+    // and delivers 2,500 messages an hour, but Istanbul itself is barely
+    // covered, so only the occasional vessel is heard on BOTH sides of the
+    // line and the hysteresis rule — correctly — refuses the rest.
+    //
+    // It stays registered because the region's message and vessel counts are
+    // a real coverage denominator, and because a receiver near Istanbul coming
+    // online would show up here first. But nothing should read these crossings
+    // as Black Sea traffic, so the flag travels with the data.
+    transitSeries: false,
     region: Object.freeze({ minLat: 40.4, maxLat: 47.4, minLon: 27.4, maxLon: 41.8 }),
     // 41.12N 29.07E, 750 m at its narrowest; land bounds the band naturally.
     gate: Object.freeze({
@@ -151,6 +172,26 @@ export const PRIMARY_CHOKEPOINT =
   Object.values(CHOKEPOINTS).find((c) => c.primary)?.id ?? null;
 
 export const CHOKEPOINT_IDS = Object.freeze(Object.keys(CHOKEPOINTS));
+
+/**
+ * Which chokepoints' crossing counts are a usable transit series.
+ *
+ * A gate can be geometrically correct, produce rows, and still measure
+ * reception rather than shipping — see the Bosphorus note above. That verdict
+ * is a measured property of a gate and belongs with the data rather than in a
+ * document nobody reads next to the JSON, so it travels on every response
+ * that serves counts.
+ *
+ * Absent `transitSeries` means yes: a gate is trusted until measurement says
+ * otherwise, and the ones that have failed say so explicitly.
+ *
+ * @returns {Record<string, boolean>} Chokepoint id -> trustworthy as a series.
+ */
+export function transitSeriesSupport() {
+  return Object.fromEntries(
+    Object.values(CHOKEPOINTS).map((c) => [c.id, c.transitSeries !== false]),
+  );
+}
 
 /**
  * Look up a chokepoint by id.

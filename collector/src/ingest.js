@@ -194,6 +194,12 @@ export function createIngest(options = {}) {
         messages: 0,
         vessels: 0,
         queueDepth: null,
+        // The denominator for queueDepth: everything in the same box, moving
+        // or not. See sampleQueues for why a bare depth cannot be read.
+        queueSeen: null,
+        // Size of the whole fix table at sweep time, which says whether a
+        // small reading is a quiet anchorage or a cold cache.
+        queueTracked: null,
         queueSamples: 0,
       };
       regionHours.set(key, row);
@@ -220,32 +226,60 @@ export function createIngest(options = {}) {
    * And once warm it samples on an interval rather than once per hour, so the
    * hour's figure is an average of several sweeps instead of a single instant
    * that happened to be the first message after the clock ticked over.
+   *
+   * ⚠️ NEITHER RULE IS ENOUGH, and two weeks of readings proved it. Cape Town
+   * queue depth rose from 102 to 184 over twelve days and then halved — 191 to
+   * 95 — across a single restart. Nothing moved in the anchorage. What moved
+   * was reception: messages per hour halved at the same instant, and across
+   * the whole series depth correlates +0.75 with message volume. A depth
+   * counted out of a fix table is a count of the ships we HEARD stop, so it
+   * rises when the receiver has a good day and falls when it does not.
+   *
+   * The fix is the same one the rest of this collector already applies to
+   * transit counts: ship the denominator with the numerator. `queueSeen`
+   * counts every vessel in the same box whatever its speed, so a reception
+   * change moves both and the SHARE holds. `queueTracked` is the size of the
+   * whole fix table, which separates a cold cache from a poor one.
+   *
+   * The raw depth is still stored unchanged — it is what was observed, and
+   * the share belongs in a view. See 005_queue_denominator.sql.
    */
   function sampleQueues(nowMs) {
     if (firstIngestMs === null || nowMs - firstIngestMs < QUEUE_WARMUP_MS) return;
     if (lastQueueSampleMs !== null && nowMs - lastQueueSampleMs < QUEUE_SAMPLE_MS) return;
     lastQueueSampleMs = nowMs;
 
+    /** @type {Map<object, {stopped:number, seen:number}>} */
     const counts = new Map();
-    for (const chokepoint of Object.values(CHOKEPOINTS)) counts.set(chokepoint, 0);
+    for (const chokepoint of Object.values(CHOKEPOINTS)) {
+      counts.set(chokepoint, { stopped: 0, seen: 0 });
+    }
     for (const fix of fixes.values()) {
-      // A missing speed is not a stopped vessel. Counting unknowns as waiting
-      // would inflate the queue hardest when the feed is degraded, which is
-      // exactly when the number gets over-read.
-      if (fix.speed === null || fix.speed === undefined) continue;
-      if (fix.speed > queueMaxSpeedKts) continue;
-      for (const chokepoint of counts.keys()) {
-        if (insideBox(fix.lat, fix.lon, chokepoint.queueBox)) {
-          counts.set(chokepoint, counts.get(chokepoint) + 1);
-        }
+      for (const [chokepoint, tally] of counts) {
+        if (!insideBox(fix.lat, fix.lon, chokepoint.queueBox)) continue;
+        tally.seen += 1;
+        // A missing speed is not a stopped vessel. Counting unknowns as
+        // waiting would inflate the queue hardest when the feed is degraded,
+        // which is exactly when the number gets over-read. It still counts
+        // toward `seen`: it was received, which is what the denominator is.
+        if (fix.speed === null || fix.speed === undefined) continue;
+        if (fix.speed > queueMaxSpeedKts) continue;
+        tally.stopped += 1;
       }
     }
-    for (const [chokepoint, count] of counts) {
+    const tracked = fixes.size;
+    for (const [chokepoint, tally] of counts) {
       if (!chokepoint.queueBox) continue;
       const row = regionBucket(chokepoint.id, nowMs);
-      const total = (row.queueDepth ?? 0) * row.queueSamples + count;
+      const mean = (previous, value) =>
+        Number((((previous ?? 0) * row.queueSamples + value) / (row.queueSamples + 1)).toFixed(2));
+      const depth = mean(row.queueDepth, tally.stopped);
+      const seen = mean(row.queueSeen, tally.seen);
+      const trackedMean = mean(row.queueTracked, tracked);
       row.queueSamples += 1;
-      row.queueDepth = Number((total / row.queueSamples).toFixed(2));
+      row.queueDepth = depth;
+      row.queueSeen = seen;
+      row.queueTracked = trackedMean;
     }
   }
 

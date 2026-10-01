@@ -515,3 +515,77 @@ test('hull metres measure the whole reroute, not the tanker slice', async () => 
   assert.equal(Number(row.passenger), 1);
   assert.equal(Number(row.unidentified), 1);
 });
+
+test('a queue depth is read against the population it was counted out of', async () => {
+  const pool = await freshDb();
+  const base = { chokepoint: 'goodhope', hour: HOUR, messages: 0, vessels: 0, queueSamples: 1 };
+
+  // Good reception: 20 ships heard off Cape Town, 12 of them stopped.
+  await writeBatch(pool, {
+    regionHours: [{ ...base, queueDepth: 12, queueSeen: 20, queueTracked: 4000 }],
+  });
+  // Half the reception, an hour later. The depth halves and nothing in the
+  // anchorage has changed.
+  await writeBatch(pool, {
+    regionHours: [{
+      ...base,
+      hour: '2026-09-16T13:00:00.000Z',
+      queueDepth: 6,
+      queueSeen: 10,
+      queueTracked: 2000,
+    }],
+  });
+
+  const { rows } = await pool.query(
+    `SELECT hour, queue_depth, queue_seen, queue_tracked, queue_share
+       FROM v_chokepoint_hours WHERE chokepoint = 'goodhope' ORDER BY hour`,
+  );
+  assert.equal(rows.length, 2);
+  // The raw depth halved — which is exactly what a fortnight of Cape Town
+  // readings did across a restart, and exactly what must not be read as the
+  // anchorage emptying.
+  assert.equal(Number(rows[0].queue_depth), 12);
+  assert.equal(Number(rows[1].queue_depth), 6);
+  // The share did not move, because the denominator halved with it.
+  assert.equal(Number(rows[0].queue_share), 0.6);
+  assert.equal(Number(rows[1].queue_share), 0.6);
+  // And the fix-table size separates a cold cache from a poor one.
+  assert.equal(Number(rows[0].queue_tracked), 4000);
+  assert.equal(Number(rows[1].queue_tracked), 2000);
+});
+
+test('an unmeasured queue stays unmeasured rather than becoming a zero', async () => {
+  const pool = await freshDb();
+  // Hours recorded before the denominator existed, and hours where the box
+  // was genuinely empty, must BOTH read as null — not as a share of zero
+  // that a fortnight's average would then absorb.
+  await writeBatch(pool, {
+    regionHours: [
+      { chokepoint: 'goodhope', hour: HOUR, messages: 10, vessels: 2, queueSamples: 0 },
+      {
+        chokepoint: 'goodhope',
+        hour: '2026-09-16T13:00:00.000Z',
+        messages: 10,
+        vessels: 2,
+        queueDepth: 0,
+        queueSeen: 0,
+        queueTracked: 3000,
+        queueSamples: 1,
+      },
+    ],
+  });
+
+  const { rows } = await pool.query(
+    `SELECT hour, queue_depth, queue_seen, queue_share
+       FROM v_chokepoint_hours WHERE chokepoint = 'goodhope' ORDER BY hour`,
+  );
+  // Never sampled: depth and denominator both absent.
+  assert.equal(rows[0].queue_depth, null);
+  assert.equal(rows[0].queue_seen, null);
+  assert.equal(rows[0].queue_share, null);
+  // Sampled, nothing in the box: the depth is a real zero, the share is not a
+  // number at all. Dividing by nothing received is not an empty anchorage.
+  assert.equal(Number(rows[1].queue_depth), 0);
+  assert.equal(Number(rows[1].queue_seen), 0);
+  assert.equal(rows[1].queue_share, null);
+});

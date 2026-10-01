@@ -146,18 +146,26 @@ export async function writeBatch(pool, batch) {
     for (const row of regionHours) {
       await client.query(
         `INSERT INTO region_hours
-           (chokepoint, hour, messages, vessels, queue_depth, queue_samples)
-         VALUES ($1,$2,$3,$4,$5,$6)
+           (chokepoint, hour, messages, vessels,
+            queue_depth, queue_seen, queue_tracked, queue_samples)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (chokepoint, hour) DO UPDATE SET
            messages = region_hours.messages + EXCLUDED.messages,
            -- Distinct vessels cannot be summed across flushes; the roster only
            -- grows within an hour, so the larger count is the current one.
            vessels = GREATEST(region_hours.vessels, EXCLUDED.vessels),
-           -- The queue is sampled once an hour, so exactly one flush carries a
-           -- value. Keep it rather than letting the next flush null it out.
-           queue_depth = COALESCE(EXCLUDED.queue_depth, region_hours.queue_depth),
+           -- A flush that carried no sweep must not null out one that did, and
+           -- the three queue figures move together or the share they imply is
+           -- a ratio of two different moments.
+           queue_depth   = COALESCE(EXCLUDED.queue_depth, region_hours.queue_depth),
+           queue_seen    = COALESCE(EXCLUDED.queue_seen, region_hours.queue_seen),
+           queue_tracked = COALESCE(EXCLUDED.queue_tracked, region_hours.queue_tracked),
            queue_samples = region_hours.queue_samples + EXCLUDED.queue_samples`,
-        [row.chokepoint, row.hour, row.messages, row.vessels, row.queueDepth, row.queueSamples],
+        [
+          row.chokepoint, row.hour, row.messages, row.vessels,
+          row.queueDepth, row.queueSeen ?? null, row.queueTracked ?? null,
+          row.queueSamples,
+        ],
       );
     }
 
@@ -232,6 +240,11 @@ export async function readDays(pool, query = {}) {
             sum(messages)         AS messages,
             max(vessels)          AS vessels,
             avg(queue_depth)      AS queue_depth,
+            -- The depth alone tracks reception, not the anchorage. Carry what
+            -- it has to be divided by, the same way the transit counts carry
+            -- messages and vessels.
+            avg(queue_seen)       AS queue_seen,
+            avg(queue_share)      AS queue_share,
             count(*) FILTER (WHERE observed) AS hours_observed
        FROM v_chokepoint_hours
       WHERE hour >= now() - ($1 || ' hours')::INTERVAL

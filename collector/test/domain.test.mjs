@@ -5,6 +5,7 @@ import {
   distanceToGateKm,
   PRIMARY_CHOKEPOINT,
   subscriptionBoxes,
+  transitSeriesSupport,
 } from '../src/domain/chokepoints.js';
 import {
   DEFAULT_HYSTERESIS_DEG,
@@ -404,6 +405,120 @@ test('Algoa Bay bunkering is counted as a queue', () => {
   const row = ingest.drain().regionHours.find((r) => r.chokepoint === 'goodhope');
   assert.equal(row.queueDepth, 2);
   assert.equal(row.queueSamples, 1);
+  // The two stopped vessels are the only ones IN the box, so the denominator
+  // equals the depth here. The transiting ship is 200 km away and counts
+  // toward neither.
+  assert.equal(row.queueSeen, 2);
+  assert.equal(row.queueTracked, 3);
+});
+
+test('a queue depth travels with the population it was counted out of', () => {
+  // The failure this guards is measured, not hypothetical: over two weeks
+  // Cape Town depth correlated +0.75 with message volume and halved across a
+  // restart that halved reception. A depth alone cannot tell a filling
+  // anchorage from a receiver having a good day.
+  //
+  // So halve the reception and the depth must halve WITH its denominator,
+  // leaving the share — the only reading that answers "what fraction of the
+  // ships off Cape Town are sitting still?" — unchanged.
+  // The fleet is fed while the cache is still cold, so no sweep runs; one
+  // envelope past the warm-up then triggers a single sweep over all of it.
+  // That ordering is the only one that measures the whole anchorage, which is
+  // itself the warm-up rule doing its job.
+  const sweep = (vessels) => {
+    const ingest = createIngest();
+    vessels.forEach(([mmsi, speed], index) => {
+      ingest.handle(
+        {
+          MessageType: 'PositionReport',
+          MetaData: {
+            MMSI: mmsi,
+            // Spread along Table Bay so every one is inside the queue box.
+            latitude: -33.85,
+            longitude: 18.36 + index * 0.01,
+            time_utc: new Date(NOW).toISOString(),
+          },
+          Message: { PositionReport: { Sog: speed } },
+        },
+        NOW,
+      );
+    });
+    const warm = NOW + 31 * MINUTE;
+    ingest.handle(
+      {
+        MessageType: 'PositionReport',
+        MetaData: { MMSI: 'trigger', latitude: 0, longitude: 0, time_utc: new Date(warm).toISOString() },
+        Message: { PositionReport: { Sog: 10 } },
+      },
+      warm,
+    );
+    return ingest.drain().regionHours.find((r) => r.chokepoint === 'goodhope');
+  };
+
+  // Good reception: eight ships heard off Cape Town, six of them stopped.
+  const strong = sweep([
+    ['a', 0.1], ['b', 0.0], ['c', 0.2], ['d', 0.1], ['e', 0.0], ['f', 0.3],
+    ['g', 7.0], ['h', 9.0],
+  ]);
+  // Half the reception: four of the same ships heard, three of them stopped.
+  const weak = sweep([['a', 0.1], ['b', 0.0], ['c', 0.2], ['g', 7.0]]);
+
+  assert.equal(strong.queueDepth, 6);
+  assert.equal(strong.queueSeen, 8);
+  assert.equal(weak.queueDepth, 3);
+  assert.equal(weak.queueSeen, 4);
+  // The depth halved and would read as an anchorage emptying out. The share
+  // did not move, because nothing about the anchorage did.
+  assert.equal(weak.queueDepth / strong.queueDepth, 0.5);
+  assert.equal(weak.queueDepth / weak.queueSeen, strong.queueDepth / strong.queueSeen);
+});
+
+test('an unknown speed counts toward the population but never toward the queue', () => {
+  // A missing SOG must not inflate the numerator — that would read as ships
+  // stopping precisely when the feed degrades. It must still count in the
+  // denominator, because it WAS received, and dropping it there would inflate
+  // the share by exactly the same mechanism from the other side.
+  const ingest = createIngest();
+  const at = (mmsi, lon, message) =>
+    ingest.handle(
+      {
+        MessageType: 'PositionReport',
+        MetaData: { MMSI: mmsi, latitude: -33.85, longitude: lon, time_utc: new Date(NOW).toISOString() },
+        Message: { PositionReport: message },
+      },
+      NOW,
+    );
+  at('stopped', 18.36, { Sog: 0.1 });
+  at('unknown', 18.38, {});
+  // Past the warm-up, so this envelope is the one that sweeps.
+  const warm = NOW + 31 * MINUTE;
+  ingest.handle(
+    {
+      MessageType: 'PositionReport',
+      MetaData: { MMSI: 'trigger', latitude: 0, longitude: 0, time_utc: new Date(warm).toISOString() },
+      Message: { PositionReport: { Sog: 10 } },
+    },
+    warm,
+  );
+
+  const row = ingest.drain().regionHours.find((r) => r.chokepoint === 'goodhope');
+  assert.equal(row.queueDepth, 1);
+  assert.equal(row.queueSeen, 2);
+});
+
+test('a gate that measures reception rather than traffic says so', () => {
+  const support = transitSeriesSupport();
+  // Every registered chokepoint has a verdict; silence is not an answer a
+  // consumer can act on.
+  for (const id of Object.keys(CHOKEPOINTS)) {
+    assert.equal(typeof support[id], 'boolean', `${id} has no transit-series verdict`);
+  }
+  // Measured: 47 crossings in fourteen days against ~110 a day of real
+  // traffic, and +0.93 correlation with how many vessels were received.
+  assert.equal(support.bosphorus, false);
+  // The primary series has to be one that is trusted, or the headline number
+  // is one the registry itself disclaims.
+  assert.equal(support[PRIMARY_CHOKEPOINT], true);
 });
 
 test('a stale RULES_VERSION is reported, never silently obeyed', () => {

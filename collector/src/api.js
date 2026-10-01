@@ -3,6 +3,7 @@ import {
   CHOKEPOINT_IDS,
   PRIMARY_CHOKEPOINT,
   chokepointById,
+  transitSeriesSupport,
 } from './domain/chokepoints.js';
 import { AIRSPACE_IDS } from './domain/airspaces.js';
 import {
@@ -124,6 +125,10 @@ export function createApi({ pool, ingest, stream, config, airwatch, openSky }) {
           coverage: await readCoverage(pool, hours),
           chokepoints: CHOKEPOINT_IDS,
           primary: PRIMARY_CHOKEPOINT,
+          // False means this gate's crossings measure reception, not traffic.
+          // It travels with the rows so the caveat cannot be lost between the
+          // data and whoever reads it.
+          transitSeries: transitSeriesSupport(),
           rulesVersion: config.rulesVersion,
         });
         return;
@@ -134,6 +139,9 @@ export function createApi({ pool, ingest, stream, config, airwatch, openSky }) {
         send(res, 200, {
           rows: await readDays(pool, { chokepoint, hours }),
           coverage: await readCoverage(pool, hours),
+          primary: PRIMARY_CHOKEPOINT,
+          transitSeries: transitSeriesSupport(),
+          note: 'queue_depth counts the ships we HEARD stop, so it moves with reception; queue_share is the reading to trend.',
         });
         return;
       }

@@ -2,34 +2,66 @@
 
 *Why the primary series moved to a place that is not a chokepoint.*
 
-Written September 2026, at rules version `r3`. This document is the argument
+Written September 2026, at rules version `r4`. This document is the argument
 the data is being gathered to test, written down in advance so that it can be
 shown wrong rather than quietly revised afterwards.
 
-**Status: there is a baseline.**
+**Status: the baseline held when the sample doubled.**
 
-Seven days of r3 collection, 20–27 September 2026, 374 crossings.
+Twelve full days, 19–30 September 2026, 673 crossings in the fortnight.
 
 ```
-20 Sep   24  (partial)      24 Sep   56
-21 Sep   59                 25 Sep   60
-22 Sep   55                 26 Sep   54
-23 Sep   42                 27 Sep   24  (partial)
+19 Sep   55      23 Sep   42      27 Sep   50
+20 Sep   46      24 Sep   56      28 Sep   50
+21 Sep   59      25 Sep   60      29 Sep   48
+22 Sep   55      26 Sep   54      30 Sep   64
 ```
 
-**Six full days: mean 54.3 per day, sd 5.9.** So a day has to fall below 42 or
-rise above 66 before it is outside two standard deviations — a swing of about
-22% either way. That threshold is the first genuinely useful output of this
-project, because until now there was no way to say whether any number was
-unusual.
+**Twelve full days: mean 53.2 per day, sd 6.3.** The six-day baseline was 54.3
+with sd 5.9. Doubling the sample moved the mean by one crossing and the spread
+by less than half of one — which is the single most useful thing that could
+have happened, because a baseline that moves when you add data was never a
+baseline. The alarm band is **below 41 or above 66**, essentially where six
+days put it.
 
-Direction came out **186 outbound to 188 inbound** — as even as a through-route
-should be. The 32/20 inbound skew visible in the first day was noise, and
-saying so at the time rather than reading a reroute into it was the right call.
+Direction stays even: **306 outbound to 333 inbound** over the twelve days
+(321/352 across the whole fortnight), against 186/188 in the first week. That
+tilt is 1.1 standard deviations on a coin flip over 639 events, so it is noise,
+and reading a reroute into it would be the same mistake as reading one into the
+first day's 32/20.
 
-Six days is a thin baseline. It has no weekly pattern in it, no seasonal
-weather, no month-end shipping cycle. Treat ±12 as provisional and expect it to
-widen.
+### The restart was an experiment nobody designed
+
+At 01:00 UTC on 1 October the collector restarted and came back with **half the
+message rate** — 3,100 an hour before, 1,430 after, with the same ~115 vessels
+in view, so each vessel was heard half as often. That is a 48% cut in
+reception, applied instantly, to a live series. Across the next seven hours the
+count ran at **2.0 crossings an hour against a baseline of 2.22** — inside
+normal daily variation.
+
+So the thing this project was built to get right, it got right. Over all 311
+hours with a reading, crossings correlate **+0.06** with messages per vessel
+and **+0.11** with message volume. The count measures ships, not reception.
+
+Two readings in the same table failed the same test, and both are now handled:
+
+- **`queue_depth` was a reception meter.** Cape Town depth rose 102 → 184 over
+  twelve days and then halved, 191 → 95, across that one restart — a ratio of
+  0.51 against the message ratio of 0.52. It correlates **+0.75** with message
+  volume. It was counting the ships we *heard* stop. Fixed in `r4` by shipping
+  its denominator: `queue_seen` counts every vessel in the same box whatever
+  its speed, so reception moves both and `queue_share` holds. The fourteen days
+  of bare depth already collected stay unreadable as a level, and are not
+  backfilled.
+- **The Bosphorus count is not a traffic series.** 47 crossings in fourteen
+  days against roughly 110 transits a day of real traffic — 3% — and it
+  correlates **+0.93** with how many vessels were received. On 21 September,
+  when reception roughly doubled across the whole feed, it returned 24
+  crossings against a fortnight median of 1.5. The registry now carries
+  `transitSeries: false` for it and every counts response repeats the flag.
+
+Twelve days still has no weekly pattern in it, no seasonal weather, no
+month-end cycle. Treat ±13 as provisional.
 
 The r3 gate produced five crossings between 10:09 and 13:06 UTC on 18
 September 2026 — **1.7 per hour, about 41 per day.** That is enough events to
@@ -200,13 +232,35 @@ All of it is already implemented; none of it is validated.
 
 | Series | What it is | Why |
 | --- | --- | --- |
-| `outbound` / `inbound` | Cape gate crossings per hour, both directions | The raw reroute volume |
-| `outbound / vessels` | Transits over distinct vessels received | **The robust series.** Reception varies; a raw count cannot tell a quiet sea from a quiet receiver |
+| `outbound` / `inbound` | Cape gate crossings per hour, both directions | **The series to trade.** Measured independent of reception — see below |
+| `outbound / vessels` | Transits over distinct vessels received | The cross-check, not the headline. Equivalent to the raw count in practice |
 | `outbound_laden` / `outbound_ballast` | Draught-to-length ratio, ≥0.055 laden | Laden westbound is cargo actually moving, not repositioning |
 | `outbound_kdwt` | Approximate deadweight crossing | Tonnes beat hulls; one VLCC is twenty coasters |
-| `queue_depth` | Vessels stopped in Table Bay | Ships at anchor off Cape Town, the only anchorage this feed reaches |
+| `queue_share` | Stopped vessels over all vessels in Table Bay | Ships at anchor off Cape Town, as a fraction so reception divides out |
+| `queue_depth` | Vessels stopped in Table Bay | Kept as the raw observation. **Not readable as a level** — see below |
 | `dark` / `spoofed` | AIS silences, classified | Sanctioned and evasive tonnage takes this route too |
 | `observed` | Whether the collector was running | Without it every number above is uninterpretable |
+
+### Which of these survived two weeks of measurement
+
+The denominator rule in `001_init.sql` says a count must never travel without
+the thing it has to be read against. Two weeks showed the rule was being
+applied in the wrong place in two of these rows.
+
+**The raw crossing count needs no normalising.** It correlates +0.11 with
+message volume and +0.06 with messages per vessel, and it did not move when a
+restart halved reception. Dividing it by messages makes it *worse*: the
+coefficient of variation across twelve days is **0.118 raw, 0.122 per vessel,
+0.271 per ten thousand messages.** Message volume measures how often a vessel
+is heard, not how many vessels there are, so dividing by it injects the
+receiver's noise into a series that did not have any. The denominator's job
+here is to say whether a zero is real — not to be divided by.
+
+**`queue_depth` needed exactly the normalising the count did not.** It is a
+count with no denominator at all, and it behaves like one: +0.75 against
+message volume, and a clean halving across the restart. `queue_seen` and
+`queue_share` (migration `005`) fix it. Until there are enough post-`r4` hours
+to trend, the anchorage contributes nothing to the argument.
 
 **The anchorage is a weaker cross-check than r2 claimed.** Algoa Bay, off
 Gqeberha, is the real bunkering stop for Cape traffic: ships stopped there are
@@ -238,6 +292,15 @@ tanker slice of a reroute that is mostly not tankers.
 8%**, and only 26 carried a usable draught. The one-day sample suggested 13%;
 a week says it is thinner than that. The series the argument rests on was running on roughly four
 observations a day while 87% of the traffic went unmeasured.
+
+**A fortnight confirmed it and showed the load split is worse still.** Of 673
+transits, **57 were tankers — 8.5%**, and of those only **7 read laden and 4
+ballast** in fourteen days. That is 0.8 classified tanker loadings a day. No
+threshold change rescues a series with eleven observations in two weeks; the
+reason to keep it is that it costs nothing and would become readable at
+Hormuz, where the fleet reports draught and the filter was correct to begin
+with. Hull metres — roughly **10 km of hull a day** across the Cape gate — is
+the series with enough events behind it to trend.
 
 `004_hull_metres.sql` adds a type-agnostic measure beside it. The tanker
 series are untouched, so their history stays comparable; what is new is
@@ -306,16 +369,20 @@ than the counts are.
 
 Listed in advance, so they cannot be explained away later.
 
-- **The gate never validates.** Zero crossings so far, everywhere. r2's gate
-  read `COVERAGE OFF-GATE` and was moved; if r3's does too, the thesis dies
-  with the instrument and no amount of reasoning above rescues it.
-- **Inshore bias.** Even a working r3 gate samples the coastal edge of the
+- ~~**The gate never validates.**~~ **Settled: it validates.** r2's gate read
+  `COVERAGE OFF-GATE` and was moved. The r3/r4 gate has produced 673 crossings
+  over fourteen days at a stable 53 a day, and held that rate through a
+  restart that halved reception. This one is answered.
+- **Inshore bias.** Even a working r4 gate samples the coastal edge of the
   rounding lane, not the lane. A consistent sample of a biased slice can still
   be a usable relative index — but only if the bias is stable, and weather
-  routing means it is not.
-- **No baseline.** "Cape traffic is rising" is meaningless without knowing
-  normal. That needs 30+ days before any reading is interpretable, and the data
-  cannot be backfilled — it only accrues forward.
+  routing means it is not. **Still open, and now the largest live risk:** the
+  twelve-day sd of 6.3 was measured in one weather regime, so the band will
+  widen the first time the Southern Ocean turns, and a widening band looks
+  exactly like a signal.
+- **No baseline.** Twelve days: 53.2 ± 6.3, unchanged from six days. This is
+  no longer missing, but it is not yet 30 days and carries no weekly or
+  seasonal structure. The data cannot be backfilled — it only accrues forward.
 - **Confounds.** Cape traffic also rises for Panama Canal restrictions, Chinese
   import swings, and seasonal weather routing. A rise is not automatically a
   Red Sea reroute.
@@ -332,8 +399,15 @@ Listed in advance, so they cannot be explained away later.
 ## 10. Before any money
 
 1. **One validated transit count.** Not a dashboard, not a model. One number,
-   confirmed against a published figure for the same route and window.
-2. **Thirty days of baseline**, with `observed` coverage above 95%.
+   confirmed against a published figure for the same route and window. **Still
+   the blocker.** 53 a day is internally stable, but it has never been checked
+   against anyone else's count of the same water in the same week, and a
+   stable number can be stably wrong — a gate 45 km inshore of the lane would
+   produce exactly this.
+2. **Thirty days of baseline**, with `observed` coverage above 95%. Twelve
+   full days as of 1 October; `observed` coverage over the collector's own
+   lifetime is good, and the 0.494 ratio on a 30-day window is simply the half
+   of it that predates the service.
 3. **Backtest against published freight rates.** If Cape transits do not lead
    or coincide with Baltic tanker assessments over the sample, there is nothing
    here and the honest move is to stop.
