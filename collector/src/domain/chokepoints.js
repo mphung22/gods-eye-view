@@ -98,11 +98,25 @@ export const CHOKEPOINTS = Object.freeze({
     // moving east — 17.66E to 18.64E. That is the footprint of one terrestrial
     // receiver near Cape Town, not satellite coverage of a shipping lane.
     //
-    // So r3 puts the gate at 18.15E, the measured centre of that footprint,
-    // with roughly 45 km of reception either side of the line. The band runs
-    // from just south of Table Bay down to the edge of observed reach, which
-    // is about 25 nautical miles below Cape Point — the inshore portion of the
-    // rounding lane.
+    // So r3 put the gate at 18.15E, the measured centre of that footprint,
+    // with roughly 45 km of reception either side of the line. The band ran
+    // from just south of Table Bay down to -34.75, the edge of reach as two
+    // hours of cache then showed it.
+    //
+    // r4 extends the southern end to -34.88, because a week of warm cache
+    // showed the footprint is bigger than two hours suggested:
+    //
+    //     after 2 h   -34.79 .. -33.70,  17.66 .. 18.64
+    //     after 7 d   -34.90 .. -33.53,  17.45 .. 18.99
+    //
+    // That left 17 km of live reception sitting south of the band, unused —
+    // and the crossings showed it, with 18 of 374 hugging the southern edge
+    // against 2 at the northern one. A distribution pressed against a
+    // boundary is a boundary cutting something off.
+    //
+    // -34.88 rather than -34.90: the gate stays strictly inside measured
+    // reach, which is the rule r2 broke and the band's first draft broke
+    // again by 7 km until a test caught it.
     //
     // ⚠️ That inshore bias is a real limit on what this can measure. Deep-
     // draught traffic rounds well south of here, and ALL traffic routes
@@ -112,7 +126,7 @@ export const CHOKEPOINTS = Object.freeze({
     gate: Object.freeze({
       axis: 'lon',
       line: 18.15,
-      bandMin: -34.75,
+      bandMin: -34.88,
       bandMax: -34.05,
       // Westward across the meridian is toward the Atlantic — the direction
       // Asia-to-Europe cargo takes when it gives up on Suez.

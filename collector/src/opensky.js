@@ -10,7 +10,22 @@
 // aircraft, and the whole point of this collector is that those two must never
 // be confused.
 
+import { setDefaultResultOrder } from 'node:dns';
 import { openSkyQuery } from './domain/airspaces.js';
+
+// Prefer IPv4 when resolving.
+//
+// The symptom this addresses is specific: the name resolves, then the
+// connection times out rather than being refused. That is what happens when a
+// host publishes an AAAA record and the container has no working route to it —
+// the attempt goes nowhere until the clock runs out, every time, identically.
+// Node's happy-eyeballs is meant to cover this and evidently did not here.
+//
+// Harmless if IPv6 was never the problem: every one of these hosts has an A
+// record. Process-wide because it has to apply before any lookup, and this
+// module is the only thing in the collector that talks to a third-party HTTP
+// host at all.
+setDefaultResultOrder('ipv4first');
 
 /**
  * Token endpoints, tried in order.
@@ -52,6 +67,8 @@ export function describeFetchError(error) {
 const STATES_URL = 'https://opensky-network.org/api/states/all';
 /** Refresh the token this long before it actually expires. */
 const TOKEN_SKEW_MS = 60_000;
+/** Budget for a reachability probe. Short: it only has to answer yes or no. */
+const PROBE_TIMEOUT_MS = 8_000;
 
 /**
  * Index of the OpenSky state vector array.
@@ -124,6 +141,39 @@ export function createOpenSky(config, deps = {}) {
   let creditsRemaining = null;
   let lastError = null;
   let lastOkAt = null;
+  /** @type {object|null} Which OpenSky hosts answer at all, probed on failure. */
+  let reachability = null;
+
+  /**
+   * Ask which OpenSky hosts are reachable, when a poll has already failed.
+   *
+   * "Cannot reach the auth host" and "cannot reach OpenSky at all" are
+   * different faults with different owners — one is a subdomain problem, the
+   * other is this network being unable to see that network. The error alone
+   * cannot tell them apart, so on failure both are probed once and the answer
+   * is reported rather than guessed at across another round trip.
+   */
+  async function probeHosts(nowMs) {
+    const targets = {
+      auth: 'https://auth.opensky-network.org/',
+      api: 'https://opensky-network.org/',
+    };
+    const out = { at: new Date(nowMs).toISOString() };
+    for (const [name, url] of Object.entries(targets)) {
+      try {
+        const res = await fetchImpl(url, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        });
+        // Any HTTP answer at all means the network path works. A 404 from the
+        // root is still a reachable host.
+        out[name] = `reachable (HTTP ${res.status})`;
+      } catch (error) {
+        out[name] = describeFetchError(error);
+      }
+    }
+    return out;
+  }
 
   async function getToken(nowMs) {
     if (!config.openSkyClientId || !config.openSkyClientSecret) return null;
@@ -234,6 +284,21 @@ export function createOpenSky(config, deps = {}) {
         // unreachable" are not the same problem.
         lastError = describeFetchError(error);
         const reason = /token/i.test(lastError) ? 'auth-error' : 'fetch-error';
+        // Only when NOTHING answered. An HTTP status — a 401, a 503 — proves
+        // the host is reachable and the fault is elsewhere, so probing it
+        // would spend requests confirming something already known.
+        //
+        // And once per quarter hour, not once per failed poll: three
+        // airspaces failing in a row must not become six extra requests.
+        const noAnswer = /UND_ERR|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH/i.test(
+          lastError,
+        );
+        if (
+          noAnswer &&
+          (!reachability || nowMs - Date.parse(reachability.at) > 15 * 60_000)
+        ) {
+          reachability = await probeHosts(nowMs);
+        }
         return { ok: false, contacts: [], reason };
       }
     },
@@ -247,6 +312,7 @@ export function createOpenSky(config, deps = {}) {
         tokenUrl,
         lastOkAt: lastOkAt ? new Date(lastOkAt).toISOString() : null,
         lastError,
+        reachability,
       };
     },
   };

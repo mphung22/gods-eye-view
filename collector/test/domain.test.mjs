@@ -98,10 +98,10 @@ test('the Cape gate catches rerouting around Africa', () => {
 });
 
 test('the Cape gate sits inside the coverage that was measured', () => {
-  // The observed footprint after two hours of collection. A gate outside it
-  // cannot produce a crossing however sound the reasoning behind its
-  // placement — which is how r2's gate failed.
-  const OBSERVED = { minLat: -34.79, maxLat: -33.7, minLon: 17.66, maxLon: 18.64 };
+  // The observed footprint after a WEEK of collection. Two hours of cache
+  // under-reports it — the r3 band was drawn from the two-hour figure and
+  // left 17 km of live reception unused at its southern end.
+  const OBSERVED = { minLat: -34.9, maxLat: -33.53, minLon: 17.45, maxLon: 18.99 };
   const { gate } = CHOKEPOINTS.goodhope;
 
   assert.ok(gate.line > OBSERVED.minLon && gate.line < OBSERVED.maxLon);
@@ -637,4 +637,55 @@ test('the token falls back to the other Keycloak path, but not past a 401', asyn
   assert.equal(rejected.reason, 'auth-error');
   assert.equal(attempts.length, 1, 'a 401 stops immediately');
   assert.match(bad.status().lastError, /check the client id and secret/);
+});
+
+test('reachability is probed only when nothing answered', async () => {
+  const config = { openSkyClientId: 'id', openSkyClientSecret: 'secret' };
+
+  // A 401 proves the host IS reachable. Probing it would spend requests
+  // confirming something the response already said.
+  const afterRejection = [];
+  const rejected = createOpenSky(config, {
+    fetchImpl: async (url) => {
+      afterRejection.push(url);
+      return { ok: false, status: 401, headers: { get: () => null } };
+    },
+  });
+  await rejected.poll(AIRSPACES.levant, NOW);
+  assert.equal(afterRejection.length, 1, 'no probe after an HTTP answer');
+  assert.equal(rejected.status().reachability, null);
+
+  // A connect timeout answered nothing, so which hosts are reachable is the
+  // next question and worth two requests to settle.
+  const calls = [];
+  const timedOut = createOpenSky(config, {
+    fetchImpl: async (url, init) => {
+      calls.push(url);
+      if (init?.method === 'HEAD' && url.includes('//opensky-network.org')) {
+        return { ok: true, status: 200, headers: { get: () => null } };
+      }
+      throw Object.assign(new Error('fetch failed'), {
+        cause: Object.assign(new Error('Connect Timeout Error'), {
+          code: 'UND_ERR_CONNECT_TIMEOUT',
+        }),
+      });
+    },
+  });
+  const result = await timedOut.poll(AIRSPACES.levant, NOW);
+  assert.equal(result.ok, false);
+
+  const reach = timedOut.status().reachability;
+  assert.ok(reach, 'a connect timeout triggers the probe');
+  // The distinction the probe exists for: one host answers, one does not.
+  assert.match(reach.auth, /UND_ERR_CONNECT_TIMEOUT/);
+  assert.match(reach.api, /reachable \(HTTP 200\)/);
+
+  // Second failure inside the window reuses the answer rather than re-asking.
+  const before = calls.length;
+  await timedOut.poll(AIRSPACES.gulf, NOW + 60_000);
+  assert.equal(
+    calls.filter((u, i) => i >= before && u.endsWith('opensky-network.org/')).length,
+    0,
+    'probe is rate-limited to once a quarter hour',
+  );
 });
