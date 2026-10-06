@@ -79,18 +79,30 @@ function Get-Snapshot {
     [string]$Name,     # file to write
     [string]$Path,     # endpoint path with query
     [string]$Sentinel, # a key the response MUST contain
-    [string]$RowKey    # a key that appears exactly once per row
+    [string]$RowKey,   # a key that appears exactly once per row
+    [int]$TimeoutSec = 120
   )
 
   $file = Join-Path $out $Name
+  # Printed BEFORE the request, not after, so a run that stalls says which
+  # endpoint it is stalled on. The first version printed nothing until the
+  # answer came back, which made a slow query and a dead script look alike.
   Write-Host ('  {0,-18} ' -f $Name) -NoNewline
 
-  # 5.1 throws on any non-2xx rather than returning the response, so the status
-  # is read back out of the exception. -TimeoutSec is generous because a Render
-  # service that has been idle can take most of a minute to answer.
-  $body = $null
+  # EVERYTHING is inside this try, and that is the point.
+  #
+  # The first version guarded only the web request and left the write, the row
+  # count and the size check outside it. With $ErrorActionPreference = 'Stop',
+  # any throw in that unguarded tail killed the whole script -- no error line,
+  # no remaining files, no README. The run stopped after the first endpoint and
+  # looked, from the folder, exactly like a run that had never been started.
+  #
+  # One endpoint's problem must cost that endpoint and nothing else. Six files
+  # and a named failure beats one file and silence.
   try {
-    $res = Invoke-WebRequest -Uri ($Base + $Path) -UseBasicParsing -TimeoutSec 120
+    # 5.1 throws on any non-2xx rather than returning the response, so the
+    # status is read back out of the exception below.
+    $res  = Invoke-WebRequest -Uri ($Base + $Path) -UseBasicParsing -TimeoutSec $TimeoutSec
     $body = $res.Content
     # 5.1 hands back a byte array instead of a string when the response omits
     # a charset. Every check below is a string operation, so a byte array
@@ -98,58 +110,58 @@ function Get-Snapshot {
     if ($body -is [byte[]]) {
       $body = [System.Text.Encoding]::UTF8.GetString($body)
     }
+
+    # Checking only the status would accept a 200 carrying {"error":"query
+    # failed"} -- the API behaving correctly, and still not data.
+    if ($body -notmatch [regex]::Escape('"' + $Sentinel + '"')) {
+      # Kept on disk, with a name that cannot be mistaken for a snapshot, so
+      # whatever came back can be read rather than guessed at.
+      Set-Content -LiteralPath "$file.FAILED" -Value $body -Encoding UTF8
+      Write-Host "FAILED (answered, but no `"$Sentinel`" in it)" -ForegroundColor Red
+      $script:Failed = 1
+      return
+    }
+
+    Set-Content -LiteralPath $file -Value $body -Encoding UTF8 -NoNewline
+
+    # One occurrence of the row key per row. Crude, exact for these payloads,
+    # and it needs no JSON parser. Zero is a legitimate answer -- /air returns
+    # no contacts whenever OpenSky is down, which is its normal state right
+    # now -- so this must never be treated as a failure.
+    $rows  = [regex]::Matches($body, [regex]::Escape('"' + $RowKey + '":')).Count
+    # Bytes on disk rather than a rounded size: a 150-byte error page and a
+    # real file both read as "4 KB" once anything rounds, and that one
+    # measurement is what catches the failure this script exists to catch.
+    $bytes = (Get-Item -LiteralPath $file).Length
+    Write-Host "ok  $rows rows, $bytes bytes" -ForegroundColor Green
   } catch {
     $code = 0
     if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
       $code = [int]$_.Exception.Response.StatusCode
     }
     $why = $_.Exception.Message
-    Write-Host "FAILED (HTTP $code) $why" -ForegroundColor Red
+    if ($code -eq 0) {
+      Write-Host "FAILED (no answer in ${TimeoutSec}s) $why" -ForegroundColor Red
+    } else {
+      Write-Host "FAILED (HTTP $code) $why" -ForegroundColor Red
+    }
     $script:Failed = 1
-    return
   }
-
-  # Checking only the status would accept a 200 carrying {"error":"query
-  # failed"} -- the API behaving correctly, and still not data.
-  if ($body -notmatch [regex]::Escape('"' + $Sentinel + '"')) {
-    # Kept on disk, with a name that cannot be mistaken for a snapshot, so
-    # whatever came back can be read rather than guessed at.
-    Set-Content -LiteralPath "$file.FAILED" -Value $body -Encoding UTF8
-    Write-Host "FAILED (answered, but no `"$Sentinel`" in it)" -ForegroundColor Red
-    $script:Failed = 1
-    return
-  }
-
-  Set-Content -LiteralPath $file -Value $body -Encoding UTF8 -NoNewline
-
-  # One occurrence of the row key per row. Crude, exact for these payloads, and
-  # it needs no JSON parser. Zero is a legitimate answer -- /air returns no
-  # contacts whenever OpenSky is down, which is its normal state right now --
-  # so this must never be treated as a failure.
-  $rows  = [regex]::Matches($body, [regex]::Escape('"' + $RowKey + '":')).Count
-  # Bytes on disk rather than a rounded size: a 150-byte error page and a real
-  # file both read as "4 KB" once anything rounds, and that one measurement is
-  # what catches the failure this script exists to catch.
-  $bytes = (Get-Item -LiteralPath $file).Length
-  Write-Host "ok  $rows rows, $bytes bytes" -ForegroundColor Green
 }
 
-Get-Snapshot 'crossings.json'   "/crossings?hours=$HoursWindow&limit=$RowLimit" 'rows'         'chokepoint'
-Get-Snapshot 'hours.json'       "/hours?hours=$HoursWindow"                     'coverage'     'chokepoint'
-Get-Snapshot 'days.json'        "/days?hours=$HoursWindow"                      'rows'         'chokepoint'
-Get-Snapshot 'gaps.json'        "/gaps?hours=$HoursWindow&limit=2000"           'rows'         'mmsi'
-Get-Snapshot 'air.json'         "/air?hours=$HoursWindow"                       'airspaces'    'airspace'
-Get-Snapshot 'diagnostics.json' '/diagnostics'                                  'chokepoints'  'id'
-Get-Snapshot 'health.json'      '/health'                                       'rulesVersion' 'ok'
+# /hours and /gaps get longer than the rest. They are the two heaviest reads in
+# the API -- /hours asks for thousands of rows out of a view that runs two
+# correlated subqueries against the gaps table for every one of them -- and a
+# timeout there is a slow query, not a broken service.
+Get-Snapshot 'crossings.json'   "/crossings?hours=$HoursWindow&limit=$RowLimit" 'rows'         'chokepoint' 180
+Get-Snapshot 'hours.json'       "/hours?hours=$HoursWindow"                     'coverage'     'chokepoint' 300
+Get-Snapshot 'days.json'        "/days?hours=$HoursWindow"                      'rows'         'chokepoint' 300
+Get-Snapshot 'gaps.json'        "/gaps?hours=$HoursWindow&limit=2000"           'rows'         'mmsi'       300
+Get-Snapshot 'air.json'         "/air?hours=$HoursWindow"                       'airspaces'    'airspace'   120
+Get-Snapshot 'diagnostics.json' '/diagnostics'                                  'chokepoints'  'id'         120
+Get-Snapshot 'health.json'      '/health'                                       'rulesVersion' 'ok'         120
 
 Write-Host ''
-if ($script:Failed -ne 0) {
-  Write-Host '==> INCOMPLETE. At least one file above is not data.' -ForegroundColor Red
-  Write-Host '    The folder is kept so you can see which -- anything that answered'
-  Write-Host '    is saved with a .FAILED suffix. Fix and re-run; a later run never'
-  Write-Host '    overwrites an earlier one.'
-  exit 1
-}
 
 $readme = @'
 God's Eye View - chokepoint collector data
@@ -191,9 +203,21 @@ TO TAKE ANOTHER
   Run collector\scripts\snapshot.ps1 from the repository. It adds a new
   dated folder and never touches the ones already here.
 '@
+# Written whether or not every endpoint answered. It explains what the files
+# mean, and a partial snapshot needs that explanation at least as much as a
+# complete one does.
 Set-Content -LiteralPath (Join-Path $Root 'README.txt') -Value $readme -Encoding UTF8
 
 $count = (Get-ChildItem -LiteralPath $Root -Directory).Count
+
+if ($script:Failed -ne 0) {
+  Write-Host '==> INCOMPLETE. At least one file above is not data.' -ForegroundColor Red
+  Write-Host '    Whatever DID download is kept and is good; anything that answered'
+  Write-Host '    with the wrong thing is saved with a .FAILED suffix. Re-run when'
+  Write-Host '    you like -- a later run adds a folder, it never overwrites one.'
+  exit 1
+}
+
 Write-Host "==> OK  $count snapshot(s) in $Root" -ForegroundColor Green
 Write-Host ''
 Write-Host 'OneDrive is uploading now. Check for the green tick in File Explorer'
