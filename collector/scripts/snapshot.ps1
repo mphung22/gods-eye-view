@@ -69,8 +69,35 @@ $stamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHHmmss'Z'")
 $out   = Join-Path $Root $stamp
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 
-Write-Host "==> $out"
-Write-Host ''
+# Every line this script prints also goes to log.txt, next to the data.
+#
+# Console output is the one artefact of a run that cannot be looked at later.
+# Close the window, or walk away while a slow endpoint finishes, and the only
+# record of what happened is gone -- which leaves a folder of files and no way
+# to tell whether the missing ones failed or were never attempted. A backup
+# script that keeps no account of its own run is half blind.
+$script:Log = Join-Path $out 'log.txt'
+
+function Say {
+  param([string]$Text, [string]$Colour = 'Gray', [switch]$NoNewline)
+  if ($NoNewline) { Write-Host $Text -ForegroundColor $Colour -NoNewline }
+  else            { Write-Host $Text -ForegroundColor $Colour }
+}
+
+function Log {
+  param([string]$Text)
+  # Appended, never buffered: if the run is killed halfway the log still holds
+  # everything up to that point, which is exactly the run worth reading.
+  Add-Content -LiteralPath $script:Log -Value $Text -Encoding UTF8
+}
+
+Log ("snapshot.ps1  started {0}" -f (Get-Date).ToUniversalTime().ToString('u'))
+Log ("base {0}" -f $Base)
+Log ("into {0}" -f $out)
+Log ''
+
+Say "==> $out" 'White'
+Say ''
 
 $script:Failed = 0
 
@@ -83,11 +110,18 @@ function Get-Snapshot {
     [int]$TimeoutSec = 120
   )
 
-  $file = Join-Path $out $Name
+  $file  = Join-Path $out $Name
+  $label = '  {0,-18} ' -f $Name
   # Printed BEFORE the request, not after, so a run that stalls says which
   # endpoint it is stalled on. The first version printed nothing until the
   # answer came back, which made a slow query and a dead script look alike.
-  Write-Host ('  {0,-18} ' -f $Name) -NoNewline
+  #
+  # The console gets it in two halves because that reads better live. The log
+  # gets one whole line once the outcome is known -- and a line written to the
+  # log the moment the request starts, so a run killed mid-request still says
+  # which endpoint it died on.
+  Say $label -NoNewline
+  Log ("$label-> requesting (timeout ${TimeoutSec}s)")
 
   # EVERYTHING is inside this try, and that is the point.
   #
@@ -117,7 +151,9 @@ function Get-Snapshot {
       # Kept on disk, with a name that cannot be mistaken for a snapshot, so
       # whatever came back can be read rather than guessed at.
       Set-Content -LiteralPath "$file.FAILED" -Value $body -Encoding UTF8
-      Write-Host "FAILED (answered, but no `"$Sentinel`" in it)" -ForegroundColor Red
+      $msg = "FAILED (answered, but no `"$Sentinel`" in it) -- kept as $Name.FAILED"
+      Say $msg 'Red'
+      Log ($label + $msg)
       $script:Failed = 1
       return
     }
@@ -133,7 +169,9 @@ function Get-Snapshot {
     # real file both read as "4 KB" once anything rounds, and that one
     # measurement is what catches the failure this script exists to catch.
     $bytes = (Get-Item -LiteralPath $file).Length
-    Write-Host "ok  $rows rows, $bytes bytes" -ForegroundColor Green
+    $msg = "ok  $rows rows, $bytes bytes"
+    Say $msg 'Green'
+    Log ($label + $msg)
   } catch {
     $code = 0
     if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
@@ -141,10 +179,12 @@ function Get-Snapshot {
     }
     $why = $_.Exception.Message
     if ($code -eq 0) {
-      Write-Host "FAILED (no answer in ${TimeoutSec}s) $why" -ForegroundColor Red
+      $msg = "FAILED (no answer in ${TimeoutSec}s) $why"
     } else {
-      Write-Host "FAILED (HTTP $code) $why" -ForegroundColor Red
+      $msg = "FAILED (HTTP $code) $why"
     }
+    Say $msg 'Red'
+    Log ($label + $msg)
     $script:Failed = 1
   }
 }
@@ -210,16 +250,23 @@ Set-Content -LiteralPath (Join-Path $Root 'README.txt') -Value $readme -Encoding
 
 $count = (Get-ChildItem -LiteralPath $Root -Directory).Count
 
+Log ''
+Log ("finished {0}" -f (Get-Date).ToUniversalTime().ToString('u'))
+
 if ($script:Failed -ne 0) {
-  Write-Host '==> INCOMPLETE. At least one file above is not data.' -ForegroundColor Red
-  Write-Host '    Whatever DID download is kept and is good; anything that answered'
-  Write-Host '    with the wrong thing is saved with a .FAILED suffix. Re-run when'
-  Write-Host '    you like -- a later run adds a folder, it never overwrites one.'
+  Log 'result: INCOMPLETE'
+  Say '==> INCOMPLETE. At least one file above is not data.' 'Red'
+  Say '    Whatever DID download is kept and is good; anything that answered'
+  Say '    with the wrong thing is saved with a .FAILED suffix. Re-run when'
+  Say '    you like -- a later run adds a folder, it never overwrites one.'
+  Say ''
+  Say "    The whole run is written down in:  $script:Log" 'Yellow'
   exit 1
 }
 
-Write-Host "==> OK  $count snapshot(s) in $Root" -ForegroundColor Green
-Write-Host ''
-Write-Host 'OneDrive is uploading now. Check for the green tick in File Explorer'
-Write-Host 'before you shut down -- a file still showing the cloud icon has not'
-Write-Host 'left this machine yet.'
+Log 'result: OK'
+Say "==> OK  $count snapshot(s) in $Root" 'Green'
+Say ''
+Say 'OneDrive is uploading now. Check for the green tick in File Explorer'
+Say 'before you shut down -- a file still showing the cloud icon has not'
+Say 'left this machine yet.'
